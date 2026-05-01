@@ -2386,22 +2386,46 @@ class MainWindow(QMainWindow):
         In Verbose Mode: handle _vt_input Enter / Ctrl keys.
         """
         if event.type() == QEvent.Type.KeyPress:
-            # --- Host Mode: forward keys to active screen tx_input ---
+            # --- Host Mode: full TX key routing ---
             if self._serial.is_host_mode:
                 screen = self._opmode_stack.currentWidget()
                 tx = (screen.tx_input
                       if screen is not None
                          and hasattr(screen, 'tx_input')
                       else None)
-                if tx is not None and obj is not tx:
-                    # Let QLineEdit fields (callsign etc.) keep focus
-                    from PyQt6.QtWidgets import QLineEdit, QTextEdit
-                    if not isinstance(obj, (QLineEdit, QTextEdit)):
-                        # Redirect keystroke to tx_input.
-                        # setFocus() ensures the cursor blinks there.
-                        tx.setFocus()
-                        QApplication.sendEvent(tx, event)
-                        return True
+                if tx is not None:
+                    from PyQt6.QtWidgets import QLineEdit as _LE
+                    # Always let QLineEdit fields (callsign etc.) keep focus
+                    if isinstance(obj, _LE):
+                        pass   # fall through to normal handling
+                    else:
+                        send_active = (
+                            hasattr(screen, 'btn_send')
+                            and screen.btn_send.isChecked()
+                        )
+                        key  = event.key()
+                        text = event.text()
+                        if send_active:
+                            # SEND active: intercept ALL keys.
+                            # Printable chars → show in TX + send via char_ready.
+                            # Non-printable → swallow (no backspace correction).
+                            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                                tx.insertPlainText('\n')
+                                if hasattr(screen, 'char_ready'):
+                                    screen.char_ready.emit('\r\n')
+                                return True
+                            if text and text.isprintable():
+                                tx.insertPlainText(text)
+                                if hasattr(screen, 'char_ready'):
+                                    screen.char_ready.emit(text)
+                                return True
+                            return True  # swallow non-printable
+                        else:
+                            # RECEIVE active: redirect to tx_input for editing.
+                            if obj is not tx:
+                                tx.setFocus()
+                                QApplication.sendEvent(tx, event)
+                                return True
             if obj is self._vt_input:
                 key  = event.key()
                 mods = event.modifiers()
