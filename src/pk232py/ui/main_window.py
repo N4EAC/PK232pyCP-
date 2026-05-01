@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QFont
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPushButton, QSplitter, QStackedWidget, QTextEdit, QToolBar,
     QVBoxLayout, QWidget,
