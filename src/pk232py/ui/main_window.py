@@ -1082,12 +1082,23 @@ class MainWindow(QMainWindow):
             self._serial.send_command(xmit[2:4], xmit[4:-1])
             self._log_monitor("[TX] XMIT — PTT ON, DIDDLE started")
 
-            # 2. Pre-typed buffer stays in tx_input.
-            #    Operator sends it by continuing to type.
-            #    Auto-flush via QTimer(0) is faster than TNC
-            #    transmission speed (e.g. 45 Baud) and would
-            #    empty tx_input before TNC sends anything,
-            #    making 'still to transmit' impossible to detect.
+            # 2. Flush any pre-typed buffer via _on_rtty_char_ready.
+            #    Each char is sent as a $20 frame and echoed in RX.
+            #    The serial worker queues frames; the TNC transmits
+            #    at its own Baudot speed — no timing issue here.
+            buffered = tx.toPlainText()
+            if buffered:
+                from PyQt6.QtGui import QTextCursor
+                for ch in buffered:
+                    # Delete char from front of TX window
+                    tx.blockSignals(True)
+                    c = tx.textCursor()
+                    c.movePosition(QTextCursor.MoveOperation.Start)
+                    c.deleteChar()
+                    tx.setTextCursor(c)
+                    tx.blockSignals(False)
+                    # Send char + echo in RX
+                    self._on_rtty_char_ready(ch)
 
             # 3. Focus tx_input for immediate keyboard input
             tx.setFocus()
