@@ -84,6 +84,13 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_signals()
         self._update_connection_ui(False)
+        # Install application-wide event filter.
+        # This makes MainWindow.eventFilter() see ALL key events
+        # in the application, regardless of which widget has focus.
+        # Needed because NoFocus buttons return focus to
+        # QStackedWidget (not MainWindow), so a widget-level filter
+        # on MainWindow alone would miss those key events.
+        QApplication.instance().installEventFilter(self)
         logger.info("%s v%s started", APP_TITLE, __version__)
 
     # ------------------------------------------------------------------
@@ -783,10 +790,25 @@ class MainWindow(QMainWindow):
         # Enable mode selector -- all modes with verbose_command selectable here
         self._mode_combo.setEnabled(True)
 
-        # Always upload parameters from INI to TNC
+        # Upload parameters unless Fast Initialization is selected.
+        # Fast Init skips the parameter upload and goes directly to
+        # Host Mode (or verbose terminal), trusting the TNC's stored
+        # values from battery-backed RAM.
         import threading
         connect_mode = self._connect_mode
+        fast_init    = self._config.fast_init
+
         def _upload():
+            if fast_init:
+                self._vt_append("[SYS] Fast Init — parameter upload skipped\n")
+                self._log_monitor("[SYS] Fast Init active — no parameter upload")
+                if connect_mode == "host":
+                    self._vt_append("[SYS] Entering Host Mode...\n")
+                    self._serial.enter_host_mode()
+                else:
+                    self._vt_append("[SYS] Verbose terminal ready (fast init)\n")
+                    self._vt_input.setFocus()
+                return
             self._vt_append("[SYS] Uploading parameters...\n")
             uploader = ParamsUploader(
                 self._serial,
@@ -1021,6 +1043,15 @@ class MainWindow(QMainWindow):
         self._wire_toggle_buttons(screen)
         self._wire_navtex_filters(screen)
 
+        # char_ready: emitted by screen eventFilter per keypress
+        # while SEND is active → _on_rtty_char_ready sends + RX echo
+        if hasattr(screen, "char_ready"):
+            try:
+                screen.char_ready.disconnect(self._on_rtty_char_ready)
+            except (RuntimeError, TypeError):
+                pass
+            screen.char_ready.connect(self._on_rtty_char_ready)
+
     def _on_screen_send(self, active: bool) -> None:
         """Called when the SEND button on the active screen is toggled.
 
@@ -1050,24 +1081,15 @@ class MainWindow(QMainWindow):
             self._serial.send_command(xmit[2:4], xmit[4:-1])
             self._log_monitor("[TX] XMIT — PTT ON, DIDDLE started")
 
-            # 2. Send any text already in TX window
-            text = tx.toPlainText().strip()
-            if text:
-                self._send_rtty_text(text)
-                tx.blockSignals(True)
-                tx.clear()
-                tx.blockSignals(False)
+            # 2. Pre-typed buffer stays in tx_input.
+            #    Operator sends it by continuing to type.
+            #    Auto-flush via QTimer(0) is faster than TNC
+            #    transmission speed (e.g. 45 Baud) and would
+            #    empty tx_input before TNC sends anything,
+            #    making 'still to transmit' impossible to detect.
 
-            # 3. Wire live-TX: every new character goes out immediately
-            try:
-                tx.textChanged.disconnect(self._on_rtty_text_changed)
-            except (RuntimeError, TypeError):
-                pass
-            tx.textChanged.connect(self._on_rtty_text_changed)
-
-            # 4. Return keyboard focus to TX window
-            #    (btn_send has NoFocus but focus may have drifted)
-            QTimer.singleShot(0, tx.setFocus)
+            # 3. Focus tx_input for immediate keyboard input
+            tx.setFocus()
 
         else:
             # 1. Warn if unsent text remains
@@ -1077,16 +1099,86 @@ class MainWindow(QMainWindow):
                 rx.moveCursor(rx.textCursor().MoveOperation.End)
                 rx.insertPlainText("\n*** Still text to transmit! ***\n")
 
-            # 2. Disconnect live-TX
-            try:
-                tx.textChanged.disconnect(self._on_rtty_text_changed)
-            except (RuntimeError, TypeError):
-                pass
+            # 2. RC (RCVE) only for modes that need explicit stop-TX.
+            #    Baudot/ASCII/Morse: RX is always on; PTT drops
+            #    automatically when host stops sending data frames.
+            #    Sending RC to a Baudot TNC can interrupt RX.
+            _cur = self._modes.current_mode
+            _continuous_rx = (
+                _cur is not None
+                and _cur.name in ("Baudot RTTY", "ASCII RTTY", "CW / Morse")
+            )
+            if _continuous_rx:
+                self._log_monitor("[TX] SEND off — PTT drops, TNC back to RX")
+            else:
+                rcve = build_command(b'RC')
+                self._serial.send_command(rcve[2:4], rcve[4:-1])
+                self._log_monitor("[TX] RCVE — PTT OFF, back to receive")
 
-            # 3. Send RCVE — TNC switches back to receive
-            rcve = build_command(b'RC')
-            self._serial.send_command(rcve[2:4], rcve[4:-1])
-            self._log_monitor("[TX] RCVE — PTT OFF, back to receive")
+    def _flush_tx_buffer(self, tx, chars: list) -> None:
+        """Send buffered TX chars one at a time with event-loop yield.
+
+        Each char is deleted from the front of tx_input, sent to the
+        TNC via _on_rtty_char_ready(), then the next char is scheduled
+        via QTimer.singleShot(0) so Qt repaints between deletions.
+        This makes the TX window visibly shrink char by char.
+        """
+        if not chars:
+            return
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        # Check SEND is still active before sending each char
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, 'btn_send') and not screen.btn_send.isChecked():
+            return  # SEND was cancelled — stop flushing
+        ch = chars[0]
+        remaining = chars[1:]
+        from PyQt6.QtGui import QTextCursor
+        tx.blockSignals(True)
+        c = tx.textCursor()
+        c.movePosition(QTextCursor.MoveOperation.Start)
+        c.deleteChar()
+        tx.setTextCursor(c)
+        tx.blockSignals(False)
+        self._on_rtty_char_ready(ch)
+        if remaining:
+            QTimer.singleShot(0, lambda: self._flush_tx_buffer(tx, remaining))
+
+    def _on_rtty_char_ready(self, char: str) -> None:
+        """Send one character and echo it in the RX window.
+
+        Called from screen eventFilter (live typing while SEND active)
+        and from _on_screen_send(True) when flushing the TX buffer.
+        CR/LF is shown as '<CR/LF>' in the RX window.
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+
+        if char in ('\r\n', '\n'):
+            display = '<CR/LF>\n'
+            wire    = b'\r\n'
+        elif char == '\r':
+            display = '<CR>\n'
+            wire    = b'\r'
+        else:
+            display = char
+            wire    = char.encode('ascii', errors='replace')
+
+        self._serial.send_data(wire, channel=0)
+
+        from PyQt6.QtGui import QTextCursor, QColor
+        rx = self._rx_display
+        cursor = rx.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = cursor.charFormat()
+        fmt.setForeground(QColor('#ffee88'))  # TX yellow
+        cursor.setCharFormat(fmt)
+        cursor.insertText(display)
+        fmt.setForeground(QColor('#88ccff'))  # reset RX blue
+        cursor.setCharFormat(fmt)
+        rx.setTextCursor(cursor)
+        rx.ensureCursorVisible()
+        self._log_monitor(f'[TX] {char!r}')
 
     def _on_rtty_text_changed(self) -> None:
         """Called whenever TX window content changes while SEND is active.
@@ -1727,111 +1819,6 @@ class MainWindow(QMainWindow):
             mode.navstn = filter_str
         self._log_monitor(f"[PARAM] NAVSTN → {filter_str}")
 
-    def _on_screen_send(self, active: bool) -> None:
-        """Called when the SEND button on the active screen is toggled.
-
-        active=True:
-          1. Send XMIT command (XM) — TNC keys PTT and starts DIDDLE.
-          2. Send any text already in TX window.
-          3. Wire tx_input.textChanged so every new character is sent
-             immediately as a data frame.
-
-        active=False:
-          1. Warn if unsent text remains in TX window.
-          2. Disconnect textChanged.
-          3. Send RCVE command (RC) — TNC returns to receive.
-        """
-        if not self._serial.is_connected or not self._serial.is_host_mode:
-            return
-
-        tx = self._tx_input
-        if tx is None:
-            return
-
-        from pk232py.comm.frame import build_command
-
-        if active:
-            # 1. Send XMIT — TNC keys PTT and starts DIDDLE
-            xmit = build_command(b'XM')
-            self._serial.send_command(xmit[2:4], xmit[4:-1])
-            self._log_monitor("[TX] XMIT — PTT ON, DIDDLE started")
-
-            # 2. Send any text already in TX window
-            text = tx.toPlainText().strip()
-            if text:
-                self._send_rtty_text(text)
-                tx.blockSignals(True)
-                tx.clear()
-                tx.blockSignals(False)
-
-            # 3. Wire live-TX: every new character goes out immediately
-            try:
-                tx.textChanged.disconnect(self._on_rtty_text_changed)
-            except (RuntimeError, TypeError):
-                pass
-            tx.textChanged.connect(self._on_rtty_text_changed)
-
-        else:
-            # 1. Warn if unsent text remains
-            pending = tx.toPlainText().strip()
-            if pending:
-                rx = self._rx_display
-                rx.moveCursor(rx.textCursor().MoveOperation.End)
-                rx.insertPlainText("\n*** Still text to transmit! ***\n")
-
-            # 2. Disconnect live-TX
-            try:
-                tx.textChanged.disconnect(self._on_rtty_text_changed)
-            except (RuntimeError, TypeError):
-                pass
-
-            # 3. Send RCVE — TNC switches back to receive
-            rcve = build_command(b'RC')
-            self._serial.send_command(rcve[2:4], rcve[4:-1])
-            self._log_monitor("[TX] RCVE — PTT OFF, back to receive")
-
-    def _on_screen_receive(self, active: bool) -> None:
-        """Called when the RECEIVE button on the active screen is toggled.
-
-        active=True:  send RECEIVE command to TNC for the current mode.
-        active=False: return TNC to standby for the current mode.
-
-        Each mode has a different receive-activation mnemonic:
-          Baudot/ASCII RTTY  — RX is always on; no explicit command needed.
-          AMTOR              — receive handled by ALIST / FEC buttons.
-          Morse              — RX is always on; no explicit command needed.
-          PACTOR             — receive via PTLIST (btn_ptlist on screen).
-        For modes where no action is needed, the call is a graceful no-op.
-        """
-        if not self._serial.is_connected or not self._serial.is_host_mode:
-            return
-
-        mode = self._modes.current_mode
-        if mode is None:
-            return
-
-        mode_name = mode.name
-
-        if active:
-            # Mode-specific receive activation
-            if mode_name in ("Baudot RTTY", "ASCII RTTY", "CW / Morse"):
-                # These modes receive continuously — no command needed.
-                # The button is purely visual feedback for the operator.
-                logger.debug("RECEIVE: %s — continuous RX, no TNC command",
-                             mode_name)
-
-            elif mode_name == "NAVTEX":
-                # NAVTEX receives automatically — no command needed.
-                logger.debug("RECEIVE: NAVTEX — auto RX")
-
-            else:
-                # Unknown mode — log and do nothing.
-                logger.debug("RECEIVE: %s — no specific receive command",
-                             mode_name)
-        else:
-            # RECEIVE toggled OFF — no explicit TNC command for most modes.
-            logger.debug("RECEIVE OFF: %s", mode_name)
-
     def _on_mode_data_received(self, data: bytes) -> None:
         """Route decoded TNC data to the correct display widget.
 
@@ -2131,6 +2118,12 @@ class MainWindow(QMainWindow):
             if hasattr(screen, "tx_input"):
                 screen.tx_input.setFont(font)
                 screen.tx_input.setStyleSheet(style_tx)
+                # TX text color: always yellow so it is visually distinct
+                # from RX text (blue) even before SEND is pressed.
+                from PyQt6.QtGui import QTextCharFormat, QColor
+                _tx_fmt = QTextCharFormat()
+                _tx_fmt.setForeground(QColor('#ffee88'))  # TX yellow
+                screen.tx_input.setCurrentCharFormat(_tx_fmt)
                 # Block cursor: width = one average character
                 char_w = screen.tx_input.fontMetrics().averageCharWidth()
                 screen.tx_input.setCursorWidth(char_w)
@@ -2277,6 +2270,13 @@ class MainWindow(QMainWindow):
             self._set_mode_indicator("host")
             self._stack.setCurrentIndex(0)
             self._wire_mode_callbacks()
+            # If no mode is active yet, activate Baudot as default.
+            # This sends the BA frame to the TNC, syncs the ComboBox
+            # to 'Baudot RTTY', wires on_data_received and all buttons.
+            # Without this call ModeManager._active_mode stays None
+            # and RX display, SEND/PTT and ComboBox are all broken.
+            if not self._modes.current_mode_name:
+                self._modes.set_mode("Baudot RTTY")
         else:
             self._sb_mode.setText("Mode: VERBOSE")
             self._set_mode_indicator("verbose")
@@ -2305,11 +2305,16 @@ class MainWindow(QMainWindow):
         text = text.replace('\r', '')
         if not text:
             return
+        from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
         cursor = self._terminal.textCursor()
-        from PyQt6.QtGui import QTextCursor
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        # Always force RX blue color — resets any TX yellow left
+        # by _on_rtty_char_ready after a SEND -> RECEIVE transition.
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor('#88ccff'))  # RX blue
+        cursor.setCharFormat(fmt)
+        cursor.insertText(text)
         self._terminal.setTextCursor(cursor)
-        self._terminal.insertPlainText(text)
         self._terminal.ensureCursorVisible()
 
     def _log_monitor(self, text: str, raw: bytes = b"") -> None:
@@ -2371,13 +2376,32 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event) -> bool:
-        """Intercept keys in verbose terminal input.
+        """Intercept keys for verbose terminal and opmode TX window.
 
-        Note: Opmode screens (Baudot, AMTOR, Morse etc.) manage their own
-        TX input Enter-key handling via their own eventFilter.  MainWindow
-        only needs to handle the verbose terminal input (_vt_input) here.
+        In Host Mode: forward all keypresses to the active screen's
+        tx_input so that TX input works regardless of which widget
+        currently holds focus. This is necessary because NoFocus
+        buttons return focus to MainWindow, not to tx_input.
+
+        In Verbose Mode: handle _vt_input Enter / Ctrl keys.
         """
         if event.type() == QEvent.Type.KeyPress:
+            # --- Host Mode: forward keys to active screen tx_input ---
+            if self._serial.is_host_mode:
+                screen = self._opmode_stack.currentWidget()
+                tx = (screen.tx_input
+                      if screen is not None
+                         and hasattr(screen, 'tx_input')
+                      else None)
+                if tx is not None and obj is not tx:
+                    # Let QLineEdit fields (callsign etc.) keep focus
+                    from PyQt6.QtWidgets import QLineEdit, QTextEdit
+                    if not isinstance(obj, (QLineEdit, QTextEdit)):
+                        # Redirect keystroke to tx_input.
+                        # setFocus() ensures the cursor blinks there.
+                        tx.setFocus()
+                        QApplication.sendEvent(tx, event)
+                        return True
             if obj is self._vt_input:
                 key  = event.key()
                 mods = event.modifiers()
