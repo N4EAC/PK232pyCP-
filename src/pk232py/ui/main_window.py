@@ -82,6 +82,13 @@ class MainWindow(QMainWindow):
         self._app_config = self._config_mgr.app
         self._misc_params:   dict = {}
         self._connect_mode:  str  = "verbose"
+        # TX state flag — independent of Qt button states.
+        # Set True by _on_screen_send(True), False by _on_screen_send(False).
+        # Used by eventFilter and _on_screen_receive to avoid
+        # relying on btn_send.isChecked() which can be stale
+        # due to blockSignals() in RttyBaseScreen toggle handlers.
+        self._send_active: bool = False
+
         self._build_ui()
         self._connect_signals()
         self._update_connection_ui(False)
@@ -1077,6 +1084,7 @@ class MainWindow(QMainWindow):
         from pk232py.comm.frame import build_command
 
         if active:
+            self._send_active = True   # track TX state independently of Qt
             # 1. Send XMIT — TNC keys PTT and starts DIDDLE
             xmit = build_command(b'XM')
             self._serial.send_command(xmit[2:4], xmit[4:-1])
@@ -1110,6 +1118,7 @@ class MainWindow(QMainWindow):
             tx.setFocus()
 
         else:
+            self._send_active = False  # track TX state independently of Qt
             # 1. Warn if unsent text remains
             pending = tx.toPlainText().strip()
             if pending:
@@ -1271,6 +1280,14 @@ class MainWindow(QMainWindow):
         mode_name = mode.name
 
         if active:
+            # If SEND was active, deactivate it now.
+            # We check self._send_active (not btn_send.isChecked())
+            # because RttyBaseScreen._on_receive_toggled() sets
+            # btn_send=False with blockSignals BEFORE this method
+            # runs, making btn_send.isChecked() already False here.
+            if self._send_active:
+                self._on_screen_send(False)   # ← clears _send_active + PTT logic
+
             # Mode-specific receive activation
             if mode_name in ("Baudot RTTY", "ASCII RTTY", "CW / Morse"):
                 # These modes receive continuously — no command needed.
@@ -2417,10 +2434,7 @@ class MainWindow(QMainWindow):
                     if isinstance(obj, _LE):
                         pass   # fall through to normal handling
                     else:
-                        send_active = (
-                            hasattr(screen, 'btn_send')
-                            and screen.btn_send.isChecked()
-                        )
+                        send_active = self._send_active
                         key  = event.key()
                         text = event.text()
                         if send_active:
