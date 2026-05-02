@@ -1082,23 +1082,29 @@ class MainWindow(QMainWindow):
             self._serial.send_command(xmit[2:4], xmit[4:-1])
             self._log_monitor("[TX] XMIT — PTT ON, DIDDLE started")
 
-            # 2. Flush any pre-typed buffer via _on_rtty_char_ready.
-            #    Each char is sent as a $20 frame and echoed in RX.
-            #    The serial worker queues frames; the TNC transmits
-            #    at its own Baudot speed — no timing issue here.
+            # 2. Flush any pre-typed buffer AFTER XM ACK.
+            #    send_command(XM) is async (worker queue).
+            #    send_data($20) is sync (direct serial write).
+            #    Without delay, $20 frames arrive before XM
+            #    → TNC treats them as monitor data, ignores them,
+            #    then XM arrives → PTT ON with empty buffer
+            #    → TNC stays in DIDDLE, RECEIVE impossible.
+            #    300ms > XM round-trip time at 9600 baud.
             buffered = tx.toPlainText()
             if buffered:
-                from PyQt6.QtGui import QTextCursor
-                for ch in buffered:
-                    # Delete char from front of TX window
-                    tx.blockSignals(True)
-                    c = tx.textCursor()
-                    c.movePosition(QTextCursor.MoveOperation.Start)
-                    c.deleteChar()
-                    tx.setTextCursor(c)
-                    tx.blockSignals(False)
-                    # Send char + echo in RX
-                    self._on_rtty_char_ready(ch)
+                def _flush_after_xm():
+                    from PyQt6.QtGui import QTextCursor
+                    # Re-read tx at flush time (user may have edited)
+                    current = tx.toPlainText()
+                    for ch in current:
+                        tx.blockSignals(True)
+                        c = tx.textCursor()
+                        c.movePosition(QTextCursor.MoveOperation.Start)
+                        c.deleteChar()
+                        tx.setTextCursor(c)
+                        tx.blockSignals(False)
+                        self._on_rtty_char_ready(ch)
+                QTimer.singleShot(300, _flush_after_xm)
 
             # 3. Focus tx_input for immediate keyboard input
             tx.setFocus()
