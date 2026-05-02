@@ -88,6 +88,9 @@ class MainWindow(QMainWindow):
         # relying on btn_send.isChecked() which can be stale
         # due to blockSignals() in RttyBaseScreen toggle handlers.
         self._send_active: bool = False
+        # Shared TX/RX content preserved across mode switches.
+        self._shared_tx_text: str = ""
+        self._shared_rx_doc  = None  # QTextDocument or None
         # Tracks how many chars in tx_input have been ACK'd by TNC.
         # Chars 0.._tx_send_pos-1 are GREEN (confirmed sent).
         # Chars _tx_send_pos..end are WHITE (pending).
@@ -582,8 +585,25 @@ class MainWindow(QMainWindow):
         if screen is None:
             logger.warning("No opmode screen registered for mode: %s", name)
             return
+
+        # Save TX text + RX document from outgoing screen
+        old = self._opmode_stack.currentWidget()
+        if old is not None and old is not screen:
+            if hasattr(old, 'tx_input') and old.tx_input:
+                self._shared_tx_text = old.tx_input.toPlainText()
+            if hasattr(old, 'rx_display') and old.rx_display:
+                self._shared_rx_doc = old.rx_display.document()
+
         self._opmode_stack.setCurrentWidget(screen)
         logger.debug("Opmode screen switched to: %s", name)
+
+        # Restore TX text + RX document into incoming screen
+        if hasattr(screen, 'tx_input') and screen.tx_input:
+            if self._shared_tx_text:
+                screen.tx_input.setPlainText(self._shared_tx_text)
+        if hasattr(screen, 'rx_display') and screen.rx_display:
+            if self._shared_rx_doc is not None:
+                screen.rx_display.setDocument(self._shared_rx_doc)
 
         # For RTTY/Morse screens: set RECEIVE button green on entry
         # because the TNC starts in receive mode.
@@ -1082,6 +1102,18 @@ class MainWindow(QMainWindow):
                 pass
             screen.char_ready.connect(self._on_rtty_char_ready)
 
+        # Clear TX / Clear RX buttons
+        for sig, slot in [
+            ('clear_tx_req', self._on_clear_tx),
+            ('clear_rx_req', self._on_clear_rx),
+        ]:
+            if hasattr(screen, sig):
+                try:
+                    getattr(screen, sig).disconnect(slot)
+                except (RuntimeError, TypeError):
+                    pass
+                getattr(screen, sig).connect(slot)
+
     def _on_screen_send(self, active: bool) -> None:
         """Called when the SEND button on the active screen is toggled.
 
@@ -1208,6 +1240,26 @@ class MainWindow(QMainWindow):
         self._on_rtty_char_ready(ch)
         if remaining:
             QTimer.singleShot(0, lambda: self._flush_tx_buffer(tx, remaining))
+
+    def _on_clear_tx(self) -> None:
+        """Clear TX window and reset TX character array."""
+        screen = self._opmode_stack.currentWidget()
+        tx = getattr(screen, 'tx_input', None)
+        if tx is not None:
+            tx.clear()
+        self._tx_char_array.clear()
+        self._tx_send_idx = 0
+        self._tx_ack_idx  = 0
+        self._shared_tx_text = ""
+        self._log_monitor("[SYS] TX buffer cleared")
+
+    def _on_clear_rx(self) -> None:
+        """Clear RX display window."""
+        rx = self._rx_display
+        if rx is not None:
+            rx.clear()
+        self._shared_rx_doc = None
+        self._log_monitor("[SYS] RX display cleared")
 
     def _on_rtty_data_ack(self) -> None:
         """Called when TNC sends DATA_ACK ($5F XX XX $00) for a sent char.
