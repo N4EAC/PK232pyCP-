@@ -1163,8 +1163,10 @@ class MainWindow(QMainWindow):
             n = len(self._tx_char_array)
             self._tx_send_idx = n
             self._tx_ack_idx  = n
-            # 1. Warn if unsent text remains
-            pending = tx.toPlainText().strip()
+            # 1. Warn if there are chars in the array not yet ACK'd.
+            #    Cannot use tx.toPlainText() — chars stay in TX window
+            #    by design even after being sent and confirmed.
+            pending = len(self._tx_char_array) > self._tx_ack_idx
             if pending:
                 rx = self._rx_display
                 rx.moveCursor(rx.textCursor().MoveOperation.End)
