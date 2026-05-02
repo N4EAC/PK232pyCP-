@@ -91,11 +91,17 @@ class MainWindow(QMainWindow):
         # Tracks how many chars in tx_input have been ACK'd by TNC.
         # Chars 0.._tx_send_pos-1 are GREEN (confirmed sent).
         # Chars _tx_send_pos..end are WHITE (pending).
-        self._tx_send_pos: int = 0
-        # Queue of display strings waiting for TNC DATA_ACK.
-        # Each entry corresponds to one sent character.
-        # _on_rtty_data_ack() pops from front and shows in RX.
-        self._tx_ack_queue: list = []
+        # TX character array — max 256 entries.
+        # Each entry: {'char': str, 'display': str, 'sent': bool}
+        # 'char'    = raw char sent to TNC
+        # 'display' = what to show in RX window after ACK
+        # 'sent'    = True after TNC DATA_ACK received
+        self._tx_char_array: list = []
+        self._tx_MAX = 256          # max array size
+        # Index of next char to send (during buffer flush)
+        self._tx_send_idx: int = 0
+        # Index of next char awaiting ACK
+        self._tx_ack_idx: int = 0
         # Re-entry guard for eventFilter.
         # insertPlainText() generates Qt-internal events that
         # re-enter the app-wide eventFilter and cause recursion.
@@ -1114,19 +1120,18 @@ class MainWindow(QMainWindow):
             #    then XM arrives → PTT ON with empty buffer
             #    → TNC stays in DIDDLE, RECEIVE impossible.
             #    300ms > XM round-trip time at 9600 baud.
-            buffered = tx.toPlainText()
-            if buffered:
+            # Flush unsent chars from _tx_char_array after XM ACK.
+            # Only chars from _tx_ack_idx onward are unsent.
+            # Chars before _tx_ack_idx were already sent in a prior
+            # SEND cycle and must NOT be sent again.
+            # No chars are deleted from tx_input.
+            unsent_start = self._tx_ack_idx
+            unsent_chars = [
+                e['char'] for e in self._tx_char_array[unsent_start:]
+            ]
+            if unsent_chars:
                 def _flush_after_xm():
-                    from PyQt6.QtGui import QTextCursor
-                    # Re-read tx at flush time (user may have edited)
-                    current = tx.toPlainText()
-                    for ch in current:
-                        tx.blockSignals(True)
-                        c = tx.textCursor()
-                        c.movePosition(QTextCursor.MoveOperation.Start)
-                        c.deleteChar()
-                        tx.setTextCursor(c)
-                        tx.blockSignals(False)
+                    for ch in unsent_chars:
                         self._on_rtty_char_ready(ch)
                 QTimer.singleShot(300, _flush_after_xm)
 
@@ -1135,9 +1140,12 @@ class MainWindow(QMainWindow):
 
         else:
             self._send_active = False  # track TX state independently of Qt
-            # Reset ACK tracking — next SEND starts fresh.
-            self._tx_send_pos = 0
-            self._tx_ack_queue.clear()
+            # Advance indices to end of array.
+            # History remains visible in TX window (green = sent).
+            # Next SEND will only send newly typed chars.
+            n = len(self._tx_char_array)
+            self._tx_send_idx = n
+            self._tx_ack_idx  = n
             # 1. Warn if unsent text remains
             pending = tx.toPlainText().strip()
             if pending:
@@ -1193,14 +1201,22 @@ class MainWindow(QMainWindow):
         screen = self._opmode_stack.currentWidget()
         tx = getattr(screen, 'tx_input', None)
 
+        from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
+
+        idx = self._tx_ack_idx
+        if idx >= len(self._tx_char_array):
+            return  # no pending chars — spurious ACK, ignore
+
+        entry = self._tx_char_array[idx]
+        entry['sent'] = True
+        self._tx_ack_idx += 1
+
         # Colour the confirmed char GREEN in tx_input
         if tx is not None:
-            from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
             doc = tx.document()
-            pos = self._tx_send_pos
-            if pos < doc.characterCount() - 1:  # -1 for trailing \n
+            if idx < doc.characterCount() - 1:
                 cursor = QTextCursor(doc)
-                cursor.setPosition(pos)
+                cursor.setPosition(idx)
                 cursor.movePosition(
                     QTextCursor.MoveOperation.Right,
                     QTextCursor.MoveMode.KeepAnchor,
@@ -1209,23 +1225,20 @@ class MainWindow(QMainWindow):
                 green_fmt = QTextCharFormat()
                 green_fmt.setForeground(QColor('#88ff88'))  # confirmed green
                 cursor.setCharFormat(green_fmt)
-            self._tx_send_pos += 1
 
         # Show confirmed char in RX window (yellow)
-        if self._tx_ack_queue:
-            display = self._tx_ack_queue.pop(0)
-            from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
-            rx = self._rx_display
-            cursor = rx.textCursor()
-            cursor.movePosition(QTextCursor.MoveOperation.End)
-            fmt = QTextCharFormat()
-            fmt.setForeground(QColor('#ffee88'))  # TX yellow
-            cursor.setCharFormat(fmt)
-            cursor.insertText(display)
-            fmt.setForeground(QColor('#88ccff'))  # reset to RX blue
-            cursor.setCharFormat(fmt)
-            rx.setTextCursor(cursor)
-            rx.ensureCursorVisible()
+        display = entry['display']
+        rx = self._rx_display
+        cursor = rx.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor('#ffee88'))  # TX yellow
+        cursor.setCharFormat(fmt)
+        cursor.insertText(display)
+        fmt.setForeground(QColor('#88ccff'))  # reset to RX blue
+        cursor.setCharFormat(fmt)
+        rx.setTextCursor(cursor)
+        rx.ensureCursorVisible()
 
     def _on_rtty_char_ready(self, char: str) -> None:
         """Send one character and echo it in the RX window.
@@ -1250,8 +1263,6 @@ class MainWindow(QMainWindow):
         self._serial.send_data(wire, channel=0)
         # RX echo (yellow) will appear in _on_rtty_data_ack
         # when TNC sends DATA_ACK for this character.
-        # Store display text for the ACK handler.
-        self._tx_ack_queue.append(display)
         self._log_monitor(f'[TX] {char!r}')
 
     def _on_rtty_text_changed(self) -> None:
@@ -2500,6 +2511,10 @@ class MainWindow(QMainWindow):
                                     tx.insertPlainText('\n')
                                 finally:
                                     self._in_event_filter = False
+                                if len(self._tx_char_array) < self._tx_MAX:
+                                    self._tx_char_array.append(
+                                        {'char': '\r\n', 'display': '<CR/LF>\n', 'sent': False}
+                                    )
                                 if hasattr(screen, 'char_ready'):
                                     screen.char_ready.emit('\r\n')
                                 return True
@@ -2510,6 +2525,10 @@ class MainWindow(QMainWindow):
                                     tx.insertPlainText(text)
                                 finally:
                                     self._in_event_filter = False
+                                if len(self._tx_char_array) < self._tx_MAX:
+                                    self._tx_char_array.append(
+                                        {'char': text, 'display': text, 'sent': False}
+                                    )
                                 if hasattr(screen, 'char_ready'):
                                     screen.char_ready.emit(text)
                                 return True
