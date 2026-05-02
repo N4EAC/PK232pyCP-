@@ -1120,6 +1120,23 @@ class MainWindow(QMainWindow):
             #    then XM arrives → PTT ON with empty buffer
             #    → TNC stays in DIDDLE, RECEIVE impossible.
             #    300ms > XM round-trip time at 9600 baud.
+            # Load any pre-typed chars from tx_input into array.
+            # Chars typed during RECEIVE bypass the eventFilter
+            # array-fill (send_active was False then), so tx_input
+            # may contain text that has no array entries yet.
+            # We load them now so they get ACK tracking + colouring.
+            pre_text = tx.toPlainText()
+            array_len = len(self._tx_char_array)
+            if len(pre_text) > array_len:
+                # New chars are those beyond current array end
+                new_chars = pre_text[array_len:]
+                for ch in new_chars:
+                    if len(self._tx_char_array) < self._tx_MAX:
+                        disp = '<CR/LF>\n' if ch == '\n' else ch
+                        self._tx_char_array.append(
+                            {'char': ch, 'display': disp, 'sent': False}
+                        )
+
             # Flush unsent chars from _tx_char_array after XM ACK.
             # Only chars from _tx_ack_idx onward are unsent.
             # Chars before _tx_ack_idx were already sent in a prior
@@ -1211,10 +1228,13 @@ class MainWindow(QMainWindow):
         entry['sent'] = True
         self._tx_ack_idx += 1
 
-        # Colour the confirmed char GREEN in tx_input
+        # Colour the confirmed char GREEN in tx_input.
+        # idx is the position in _tx_char_array which maps 1:1
+        # to character position in tx_input.
         if tx is not None:
             doc = tx.document()
-            if idx < doc.characterCount() - 1:
+            char_count = doc.characterCount() - 1  # -1 for trailing block
+            if idx < char_count:
                 cursor = QTextCursor(doc)
                 cursor.setPosition(idx)
                 cursor.movePosition(
@@ -2535,7 +2555,20 @@ class MainWindow(QMainWindow):
                             return True  # swallow non-printable
                         else:
                             # RECEIVE active: redirect to tx_input for editing.
+                            # Also load char into array for future ACK tracking
+                            # when SEND is pressed.
                             if obj is not tx:
+                                # Track printable chars in array
+                                if (text and text.isprintable()
+                                        and len(self._tx_char_array) < self._tx_MAX):
+                                    self._tx_char_array.append(
+                                        {'char': text, 'display': text, 'sent': False}
+                                    )
+                                elif (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+                                        and len(self._tx_char_array) < self._tx_MAX):
+                                    self._tx_char_array.append(
+                                        {'char': '\r\n', 'display': '<CR/LF>\n', 'sent': False}
+                                    )
                                 self._in_event_filter = True
                                 try:
                                     tx.setFocus()
