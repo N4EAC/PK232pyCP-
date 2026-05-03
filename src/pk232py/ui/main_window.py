@@ -1,6 +1,3 @@
-# === E:\PK232\pk232py_repo\src\pk232py\ui\main_window.py ===
-# pk232py - Modern multimode terminal for AEA PK-232 / PK-232MBX TNC
-# Copyright (C) 2026  OE3GAS  --  GPL v2
 """Main window of PK232PY.
 
 Layout:
@@ -54,6 +51,7 @@ from .screens.navtex_screen  import NavtexScreen
 from .screens.signal_screen  import SignalScreen
 from .screens.fax_screen     import FaxScreen
 from .screens.pactor_screen  import PactorScreen   # added
+from .screens.baudot_tx_controller import BaudotTxController
 
 logger = logging.getLogger(__name__)
 
@@ -83,31 +81,16 @@ class MainWindow(QMainWindow):
         self._misc_params:   dict = {}
         self._connect_mode:  str  = "verbose"
         # TX state flag — independent of Qt button states.
-        # Set True by _on_screen_send(True), False by _on_screen_send(False).
-        # Used by eventFilter and _on_screen_receive to avoid
-        # relying on btn_send.isChecked() which can be stale
-        # due to blockSignals() in RttyBaseScreen toggle handlers.
         self._send_active: bool = False
         # Shared TX/RX content preserved across mode switches.
         self._shared_tx_text: str = ""
         self._shared_rx_doc  = None  # QTextDocument or None
-        # Tracks how many chars in tx_input have been ACK'd by TNC.
-        # Chars 0.._tx_send_pos-1 are GREEN (confirmed sent).
-        # Chars _tx_send_pos..end are WHITE (pending).
-        # TX character array — max 256 entries.
-        # Each entry: {'char': str, 'display': str, 'sent': bool}
-        # 'char'    = raw char sent to TNC
-        # 'display' = what to show in RX window after ACK
-        # 'sent'    = True after TNC DATA_ACK received
-        self._tx_char_array: list = []
-        self._tx_MAX = 256          # max array size
-        # Index of next char to send (during buffer flush)
-        self._tx_send_idx: int = 0
-        # Index of next char awaiting ACK
-        self._tx_ack_idx: int = 0
+        # BaudotTxController — rate-limited TX with DATA_ACK tracking.
+        # Proven in baudot_tx_test.py (2026-05-02).
+        # Handles: char buffering, rate-limited send, colour_at, EOT marker.
+        self._baudot_ctrl = BaudotTxController(self)
+        self._baudot_ctrl.set_mspeed(50)   # default 50 Baud — updated from config
         # Re-entry guard for eventFilter.
-        # insertPlainText() generates Qt-internal events that
-        # re-enter the app-wide eventFilter and cause recursion.
         self._in_event_filter: bool = False
 
         self._build_ui()
@@ -1093,14 +1076,66 @@ class MainWindow(QMainWindow):
         self._wire_toggle_buttons(screen)
         self._wire_navtex_filters(screen)
 
-        # char_ready: emitted by screen eventFilter per keypress
-        # while SEND is active → _on_rtty_char_ready sends + RX echo
+        # char_ready: legacy signal — kept for non-Baudot modes
         if hasattr(screen, "char_ready"):
             try:
                 screen.char_ready.disconnect(self._on_rtty_char_ready)
             except (RuntimeError, TypeError):
                 pass
             screen.char_ready.connect(self._on_rtty_char_ready)
+
+        # char_typed: TxInputWidget signal → BaudotTxController (Baudot/ASCII)
+        # Wired only for screens that have TxInputWidget (char_typed signal).
+        mode = self._modes.current_mode
+        is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
+        tx = getattr(screen, "tx_input", None)
+        if is_rtty and tx is not None and hasattr(tx, "char_typed"):
+            try:
+                tx.char_typed.disconnect(self._baudot_ctrl.on_char_typed)
+            except (RuntimeError, TypeError):
+                pass
+            tx.char_typed.connect(self._baudot_ctrl.on_char_typed)
+            # Controller → screen: colour ACK'd chars + show in RX
+            try:
+                self._baudot_ctrl.colour_char.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.colour_char.connect(
+                lambda idx, s, _tx=tx: _tx.colour_at(idx, s)
+            )
+            try:
+                self._baudot_ctrl.show_in_rx.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.show_in_rx.connect(self._on_baudot_rx_char)
+            try:
+                self._baudot_ctrl.send_to_tnc.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.send_to_tnc.connect(self._on_baudot_send_char)
+            try:
+                self._baudot_ctrl.eot_reached.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.eot_reached.connect(self._on_baudot_eot)
+            try:
+                self._baudot_ctrl.status_msg.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.status_msg.connect(
+                lambda m: self.statusBar().showMessage(m, 3000)
+            )
+            try:
+                self._baudot_ctrl.warning.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.warning.connect(self._on_baudot_warning)
+            # Set MSPEED from config
+            try:
+                mspeed = int(self._app_config.baudot.mspeed)
+                self._baudot_ctrl.set_mspeed(mspeed)
+            except Exception:
+                pass
 
         # Clear TX / Clear RX buttons
         for sig, slot in [
@@ -1113,6 +1148,18 @@ class MainWindow(QMainWindow):
                 except (RuntimeError, TypeError):
                     pass
                 getattr(screen, sig).connect(slot)
+
+        # Macro buttons — wire each button to insert macro text into TX
+        if hasattr(screen, 'macro_buttons') and hasattr(screen, '_macro_store'):
+            for i, btn in enumerate(screen.macro_buttons):
+                try:
+                    btn.clicked.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                # Capture index i by default arg
+                btn.clicked.connect(
+                    lambda checked=False, idx=i, s=screen: self._on_macro_clicked(idx, s)
+                )
 
     def _on_screen_send(self, active: bool) -> None:
         """Called when the SEND button on the active screen is toggled.
@@ -1137,77 +1184,48 @@ class MainWindow(QMainWindow):
 
         from pk232py.comm.frame import build_command
 
+        mode = self._modes.current_mode
+        is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
+
         if active:
-            self._send_active = True   # track TX state independently of Qt
-            # 1. Send XMIT — TNC keys PTT and starts DIDDLE
+            self._send_active = True
+            # Send XM — TNC keys PTT and starts DIDDLE
             xmit = build_command(b'XM')
             self._serial.send_command(xmit[2:4], xmit[4:-1])
             self._log_monitor("[TX] XMIT — PTT ON, DIDDLE started")
-
-            # 2. Flush any pre-typed buffer AFTER XM ACK.
-            #    send_command(XM) is async (worker queue).
-            #    send_data($20) is sync (direct serial write).
-            #    Without delay, $20 frames arrive before XM
-            #    → TNC treats them as monitor data, ignores them,
-            #    then XM arrives → PTT ON with empty buffer
-            #    → TNC stays in DIDDLE, RECEIVE impossible.
-            #    300ms > XM round-trip time at 9600 baud.
-            # Load any pre-typed chars from tx_input into array.
-            # Chars typed during RECEIVE bypass the eventFilter
-            # array-fill (send_active was False then), so tx_input
-            # may contain text that has no array entries yet.
-            # We load them now so they get ACK tracking + colouring.
-            pre_text = tx.toPlainText()
-            array_len = len(self._tx_char_array)
-            if len(pre_text) > array_len:
-                # New chars are those beyond current array end
-                new_chars = pre_text[array_len:]
-                for ch in new_chars:
-                    if len(self._tx_char_array) < self._tx_MAX:
-                        disp = '<CR/LF>\n' if ch == '\n' else ch
-                        self._tx_char_array.append(
-                            {'char': ch, 'display': disp, 'sent': False}
-                        )
-
-            # Flush unsent chars from _tx_char_array after XM ACK.
-            # Only chars from _tx_ack_idx onward are unsent.
-            # Chars before _tx_ack_idx were already sent in a prior
-            # SEND cycle and must NOT be sent again.
-            # No chars are deleted from tx_input.
-            unsent_start = self._tx_ack_idx
-            unsent_chars = [
-                e['char'] for e in self._tx_char_array[unsent_start:]
-            ]
-            if unsent_chars:
-                def _flush_after_xm():
-                    for ch in unsent_chars:
-                        self._on_rtty_char_ready(ch)
-                QTimer.singleShot(300, _flush_after_xm)
-
-            # 3. Focus tx_input for immediate keyboard input
+            # For Baudot/ASCII: BaudotTxController.on_send_start() is called
+            # when XM ACK arrives via _on_frame_received → _on_baudot_xm_ack.
+            # The controller then flushes unsent chars at the configured Baud rate.
+            # For other modes: flush via legacy 300ms timer.
+            if not is_rtty:
+                unsent_chars = tx.toPlainText()
+                if unsent_chars:
+                    def _flush_after_xm():
+                        self._on_rtty_char_ready(unsent_chars)
+                    QTimer.singleShot(300, _flush_after_xm)
             tx.setFocus()
 
         else:
-            self._send_active = False  # track TX state independently of Qt
-            # Advance indices to end of array.
-            # History remains visible in TX window (green = sent).
-            # Next SEND will only send newly typed chars.
-            n = len(self._tx_char_array)
-            self._tx_send_idx = n
-            self._tx_ack_idx  = n
-            # 1. Warn if there are chars in the array not yet ACK'd.
-            #    Cannot use tx.toPlainText() — chars stay in TX window
-            #    by design even after being sent and confirmed.
-            pending = len(self._tx_char_array) > self._tx_ack_idx
-            if pending:
-                rx = self._rx_display
-                rx.moveCursor(rx.textCursor().MoveOperation.End)
-                rx.insertPlainText("\n*** Still text to transmit! ***\n")
-
-            # 2. Send RC (RCVE) — switches TNC back to receive for ALL modes.
-            #    AEA manual: RCVE is valid for Baudot, ASCII, AMTOR, FAX, Morse.
-            #    Without RC, the TNC stays in DIDDLE (Baudot idle TX) indefinitely.
-            #    PTT does NOT drop automatically — RC is required.
+            self._send_active = False
+            # Baudot/ASCII: stop rate-limited send, update cycle anchors
+            if is_rtty and hasattr(tx, "char_typed"):
+                self._baudot_ctrl.on_send_stop()
+                # doc_offset must be the actual document position, not the
+                # array index. tx.document().characterCount()-1 gives the
+                # exact position where new chars will be inserted.
+                doc_len = tx.document().characterCount() - 1
+                tx.set_cycle_anchor(
+                    doc_len,
+                    self._baudot_ctrl.cycle_start
+                )
+                if self._baudot_ctrl.still_to_transmit():
+                    # Show warning in status bar only — not in RX window.
+                    # RX window spam with "Still text" on every RECEIVE
+                    # press while rate-limited chars are queued is confusing.
+                    self.statusBar().showMessage(
+                        "⚠ TX buffer not empty — unsent chars remain", 4000
+                    )
+            # Send RC — PTT off, back to receive
             rcve = build_command(b'RC')
             self._serial.send_command(rcve[2:4], rcve[4:-1])
             self._log_monitor("[TX] RCVE — PTT OFF, back to receive")
@@ -1241,15 +1259,90 @@ class MainWindow(QMainWindow):
         if remaining:
             QTimer.singleShot(0, lambda: self._flush_tx_buffer(tx, remaining))
 
+    def _on_macro_clicked(self, idx: int, screen) -> None:
+        """Insert macro text into TX window when a macro button is clicked.
+
+        Works in both RECEIVE and SEND mode:
+        - RECEIVE: text buffered in TX, sent on next SEND press
+        - SEND: text immediately queued to rate-limited TX
+
+        Inserts text char by char via char_typed signal directly,
+        bypassing insertFromMimeData to avoid parent-chain lookup issues.
+        """
+        store = getattr(screen, '_macro_store', None)
+        if store is None or idx >= len(store.texts):
+            return
+        text = store.texts[idx]
+        if not text:
+            return
+        tx = getattr(screen, 'tx_input', None)
+        if tx is None:
+            return
+
+        from PyQt6.QtGui import QTextCharFormat, QColor
+        from .screens.ui_theme import get_theme
+        t = get_theme()
+        f = QTextCharFormat()
+        f.setForeground(QColor(t['tx_color']))
+
+        # Move cursor to end before inserting
+        c = tx.textCursor()
+        from PyQt6.QtGui import QTextCursor
+        c.movePosition(QTextCursor.MoveOperation.End)
+        tx.setTextCursor(c)
+
+        # Normalise line endings, then iterate with index for [^D] detection
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        i = 0
+        while i < len(text):
+            if text[i:i+4] == '[^D]':
+                # EOT marker — emit sentinel, insert visual marker in TX
+                from PyQt6.QtGui import QTextCharFormat as _TCF, QColor as _QC
+                f_eot = _TCF()
+                f_eot.setForeground(_QC("#ffffff"))
+                f_eot.setBackground(_QC("#cc4400"))
+                f_eot.setFontWeight(700)
+                tx.setCurrentCharFormat(f_eot)
+                tx.textCursor().insertText('[^D]')
+                tx.setCurrentCharFormat(f)
+                # [^D] = 4 doc chars, 1 _arr entry → track discrepancy
+                tx._doc_extra = getattr(tx, '_doc_extra', 0) + 3
+                tx.char_typed.emit('\x04', '[^D]')
+                i += 4
+            elif text[i] == '\n':
+                tx.setCurrentCharFormat(f)
+                c = tx.textCursor()
+                c.insertBlock()
+                tx.setTextCursor(c)
+                tx.char_typed.emit('\r\n', '<CR/LF>\n')
+                i += 1
+            elif text[i].isprintable():
+                tx.setCurrentCharFormat(f)
+                tx.textCursor().insertText(text[i])
+                tx.char_typed.emit(text[i], text[i])
+                i += 1
+            else:
+                i += 1
+
     def _on_clear_tx(self) -> None:
-        """Clear TX window and reset TX character array."""
+        """Clear TX window and reset TX state.
+
+        If SEND is currently active, the controller is cleared but
+        _send_active remains True — new keystrokes after Clear will be
+        queued immediately without needing RECEIVE → SEND cycle.
+        """
         screen = self._opmode_stack.currentWidget()
         tx = getattr(screen, 'tx_input', None)
         if tx is not None:
             tx.clear()
-        self._tx_char_array.clear()
-        self._tx_send_idx = 0
-        self._tx_ack_idx  = 0
+            if hasattr(tx, 'set_cycle_anchor'):
+                tx.set_cycle_anchor(0, 0)
+        # Preserve send_active state — clear resets _arr but PTT stays on
+        was_sending = self._send_active
+        self._baudot_ctrl.clear()
+        if was_sending:
+            # Restore send_active so new chars are queued immediately
+            self._baudot_ctrl._send_active = True
         self._shared_tx_text = ""
         self._log_monitor("[SYS] TX buffer cleared")
 
@@ -1264,55 +1357,99 @@ class MainWindow(QMainWindow):
     def _on_rtty_data_ack(self) -> None:
         """Called when TNC sends DATA_ACK ($5F XX XX $00) for a sent char.
 
-        Actions:
-          1. Colour the next unconfirmed char in tx_input GREEN.
-          2. Advance _tx_send_pos by 1.
-          3. Show the confirmed char in RX window (yellow).
+        For Baudot/ASCII: delegates to BaudotTxController.on_data_ack()
+        which handles colour_at() and show_in_rx via signals.
+
+        For other modes: legacy inline handling.
         """
+        mode = self._modes.current_mode
+        is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
+        if is_rtty:
+            self._baudot_ctrl.on_data_ack()
+            return
+
+        # Legacy: non-RTTY modes (AMTOR, Morse, etc.)
         screen = self._opmode_stack.currentWidget()
         tx = getattr(screen, 'tx_input', None)
-
         from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
-
-        idx = self._tx_ack_idx
-        if idx >= len(self._tx_char_array):
-            return  # no pending chars — spurious ACK, ignore
-
-        entry = self._tx_char_array[idx]
-        entry['sent'] = True
-        self._tx_ack_idx += 1
-
-        # Colour the confirmed char GREEN in tx_input.
-        # idx is the position in _tx_char_array which maps 1:1
-        # to character position in tx_input.
-        if tx is not None:
-            doc = tx.document()
-            char_count = doc.characterCount() - 1  # -1 for trailing block
-            if idx < char_count:
-                cursor = QTextCursor(doc)
-                cursor.setPosition(idx)
-                cursor.movePosition(
-                    QTextCursor.MoveOperation.Right,
-                    QTextCursor.MoveMode.KeepAnchor,
-                    1
-                )
-                green_fmt = QTextCharFormat()
-                green_fmt.setForeground(QColor('#88ff88'))  # confirmed green
-                cursor.setCharFormat(green_fmt)
-
-        # Show confirmed char in RX window (yellow)
-        display = entry['display']
         rx = self._rx_display
         cursor = rx.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor('#ffee88'))  # TX yellow
+        fmt.setForeground(QColor('#ffee88'))
         cursor.setCharFormat(fmt)
-        cursor.insertText(display)
-        fmt.setForeground(QColor('#88ccff'))  # reset to RX blue
+        cursor.insertText(" ")   # placeholder for legacy modes
+        fmt.setForeground(QColor('#88ccff'))
         cursor.setCharFormat(fmt)
         rx.setTextCursor(cursor)
         rx.ensureCursorVisible()
+
+    # ── BaudotTxController helpers ───────────────────────────────────────
+
+    def _on_baudot_xm_ack(self) -> None:
+        """Called when XM ACK arrives — start rate-limited send."""
+        self._baudot_ctrl.on_send_start()
+        self._log_monitor("[TX] XM ACK — BaudotTxController sending")
+
+    def _on_baudot_send_char(self, char: str) -> None:
+        """Send one character to TNC (called by BaudotTxController.send_to_tnc)."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        if char in ('\r\n', '\n'):
+            wire = b'\r\n'
+        elif char == '\r':
+            wire = b'\r'
+        else:
+            wire = char.encode('ascii', errors='replace')
+        self._serial.send_data(wire, channel=0)
+        self._log_monitor(f'[TX] {char!r}')
+
+    def _on_baudot_rx_char(self, display: str) -> None:
+        """Show one ACK'd char in RX window (amber — confirmed sent)."""
+        rx = self._rx_display
+        from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
+        cursor = rx.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor('#ffaa00'))   # amber — confirmed sent
+        cursor.setCharFormat(fmt)
+        cursor.insertText(display)
+        fmt.setForeground(QColor('#88ccff'))   # reset to RX blue
+        cursor.setCharFormat(fmt)
+        rx.setTextCursor(cursor)
+        rx.ensureCursorVisible()
+
+    def _on_baudot_eot(self) -> None:
+        """CTRL+D EOT marker reached — switch to RECEIVE."""
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
+            screen.btn_receive.setChecked(True)
+
+    def _on_baudot_warning(self, msg: str) -> None:
+        """Handle warnings from BaudotTxController.
+
+        BUFFER_FULL → modal QMessageBox (must be acknowledged).
+        A flag prevents repeated dialogs while the box is open — the
+        keyboard auto-repeat buffer can queue many BUFFER_FULL events
+        before the user clicks OK.
+        Other messages → status bar.
+        """
+        if msg == "BUFFER_FULL":
+            if getattr(self, '_buffer_full_shown', False):
+                return
+            self._buffer_full_shown = True
+            QMessageBox.warning(
+                self,
+                "TX Buffer Full",
+                "Buffer full.\nMaximum buffer size: 512 characters.\n\n"
+                "Please send or clear the current text before typing more."
+            )
+            QApplication.instance().processEvents()
+            self._buffer_full_shown = False
+        else:
+            self.statusBar().showMessage(msg, 4000)
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     def _on_rtty_char_ready(self, char: str) -> None:
         """Send one character and echo it in the RX window.
@@ -1478,6 +1615,14 @@ class MainWindow(QMainWindow):
         )
         logger.info("RBAUD set to %d Bd", baud)
         self._log_monitor(f"[PARAM] RBAUD → {baud} Bd")
+
+        # Also update BaudotTxController rate-limited TX speed.
+        # Without this, the controller stays at the default 50 Baud
+        # regardless of what the user selects in the RBAUD dropdown.
+        mode_name = mode.name if mode is not None else ""
+        if mode_name in ("Baudot RTTY", "ASCII RTTY"):
+            self._baudot_ctrl.set_mspeed(baud)
+            logger.info("BaudotTxController MSPEED → %d Baud", baud)
 
     def _wire_amtor_buttons(self, screen) -> None:
         """Connect AMTOR mode buttons to TNC commands.
@@ -2328,10 +2473,20 @@ class MainWindow(QMainWindow):
 
         Frame dispatch to the active mode is handled by ModeManager.on_frame()
         which is also connected to frame_received.
+
+        Additionally: intercept XM ACK (CMD_RESP, mnemonic=XM, status=0x00)
+        to trigger BaudotTxController.on_send_start() for Baudot/ASCII modes.
         """
         # RX blink
         if self._act_serial_status.isChecked():
             self._blink_rx()
+
+        # XM ACK → BaudotTxController for Baudot/ASCII
+        if frame.kind == FrameKind.CMD_RESP and frame.mnemonic == b'XM':
+            if len(frame.data) >= 3 and frame.data[2] == 0x00:
+                mode = self._modes.current_mode
+                if mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY"):
+                    self._on_baudot_xm_ack()
 
         # PTT indicator + OPMODE response display
         if frame.kind == FrameKind.CMD_RESP:
@@ -2432,7 +2587,19 @@ class MainWindow(QMainWindow):
     def _update_host_mode_ui(self, active: bool) -> None:
         """Switch view and enable mode selector when Host Mode is active."""
         self._mode_combo.setEnabled(active or self._serial.is_connected)
+        # CTRL+D is used as EOT marker in TX window during Host Mode.
+        # Disable the Disconnect shortcut to prevent conflict.
+        self._act_disconnect.setShortcut(
+            "" if active else "Ctrl+D"
+        )
         if active:
+            # Clear TX controller — fresh state for new Host Mode session
+            self._baudot_ctrl.clear()
+            screen = self._opmode_stack.currentWidget()
+            tx = getattr(screen, 'tx_input', None)
+            if tx is not None:
+                if hasattr(tx, 'set_cycle_anchor'):
+                    tx.set_cycle_anchor(0, 0)
             self._sb_mode.setText("Mode: HOST")
             self._set_mode_indicator("host")
             self._stack.setCurrentIndex(0)
@@ -2550,86 +2717,60 @@ class MainWindow(QMainWindow):
         currently holds focus. This is necessary because NoFocus
         buttons return focus to MainWindow, not to tx_input.
 
+        Exception: when a modal dialog is open (e.g. MacroEditDialog,
+        TNC Configuration), keys are NOT redirected — the dialog
+        handles its own input.
+
         In Verbose Mode: handle _vt_input Enter / Ctrl keys.
         """
         if event.type() == QEvent.Type.KeyPress:
             # --- Host Mode: full TX key routing ---
             # Guard against re-entry: insertPlainText() generates
             # internal Qt events that re-enter this filter.
+            # Guard against modal dialogs: QDialog subclasses must
+            # handle their own keyboard input without interference.
             if self._serial.is_host_mode and not self._in_event_filter:
+                # Skip routing if any modal dialog is currently open
+                active = QApplication.activeModalWidget()
+                if active is not None:
+                    return super().eventFilter(obj, event)
                 screen = self._opmode_stack.currentWidget()
                 tx = (screen.tx_input
-                      if screen is not None
-                         and hasattr(screen, 'tx_input')
+                      if screen is not None and hasattr(screen, 'tx_input')
                       else None)
                 if tx is not None:
                     from PyQt6.QtWidgets import QLineEdit as _LE
-                    # Always let QLineEdit fields (callsign etc.) keep focus
+                    key  = event.key()
+                    mods = event.modifiers()
+                    Alt  = Qt.KeyboardModifier.AltModifier
+
+                    # ALT+X → SEND
+                    if mods == Alt and key == Qt.Key.Key_X:
+                        if (hasattr(screen, 'btn_send')
+                                and not screen.btn_send.isChecked()):
+                            screen.btn_send.setChecked(True)
+                        return True
+
+                    # ALT+R → RECEIVE
+                    if mods == Alt and key == Qt.Key.Key_R:
+                        if self._send_active and hasattr(screen, 'btn_receive'):
+                            screen.btn_receive.setChecked(True)
+                        return True
+
+                    # QLineEdit fields keep their own focus
                     if isinstance(obj, _LE):
-                        pass   # fall through to normal handling
-                    else:
-                        send_active = self._send_active
-                        key  = event.key()
-                        text = event.text()
-                        if send_active:
-                            # SEND active: intercept ALL keys.
-                            # Write char to tx_input in WHITE (unsent).
-                            # RX echo only appears after TNC DATA_ACK.
-                            from PyQt6.QtGui import QTextCharFormat, QColor
-                            _white_fmt = QTextCharFormat()
-                            _white_fmt.setForeground(QColor('#ffffff'))
-                            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                                self._in_event_filter = True
-                                try:
-                                    tx.setCurrentCharFormat(_white_fmt)
-                                    tx.insertPlainText('\n')
-                                finally:
-                                    self._in_event_filter = False
-                                if len(self._tx_char_array) < self._tx_MAX:
-                                    self._tx_char_array.append(
-                                        {'char': '\r\n', 'display': '<CR/LF>\n', 'sent': False}
-                                    )
-                                if hasattr(screen, 'char_ready'):
-                                    screen.char_ready.emit('\r\n')
-                                return True
-                            if text and text.isprintable():
-                                self._in_event_filter = True
-                                try:
-                                    tx.setCurrentCharFormat(_white_fmt)
-                                    tx.insertPlainText(text)
-                                finally:
-                                    self._in_event_filter = False
-                                if len(self._tx_char_array) < self._tx_MAX:
-                                    self._tx_char_array.append(
-                                        {'char': text, 'display': text, 'sent': False}
-                                    )
-                                if hasattr(screen, 'char_ready'):
-                                    screen.char_ready.emit(text)
-                                return True
-                            return True  # swallow non-printable
-                        else:
-                            # RECEIVE active: redirect to tx_input for editing.
-                            # Also load char into array for future ACK tracking
-                            # when SEND is pressed.
-                            if obj is not tx:
-                                # Track printable chars in array
-                                if (text and text.isprintable()
-                                        and len(self._tx_char_array) < self._tx_MAX):
-                                    self._tx_char_array.append(
-                                        {'char': text, 'display': text, 'sent': False}
-                                    )
-                                elif (key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
-                                        and len(self._tx_char_array) < self._tx_MAX):
-                                    self._tx_char_array.append(
-                                        {'char': '\r\n', 'display': '<CR/LF>\n', 'sent': False}
-                                    )
-                                self._in_event_filter = True
-                                try:
-                                    tx.setFocus()
-                                    QApplication.sendEvent(tx, event)
-                                finally:
-                                    self._in_event_filter = False
-                                return True
+                        pass
+                    elif obj is not tx:
+                        # Redirect all other keypresses to tx_input.
+                        # TxInputWidget.keyPressEvent handles char_typed emission
+                        # and edit protection — no manual array filling needed.
+                        self._in_event_filter = True
+                        try:
+                            tx.setFocus()
+                            QApplication.sendEvent(tx, event)
+                        finally:
+                            self._in_event_filter = False
+                        return True
             if obj is self._vt_input:
                 key  = event.key()
                 mods = event.modifiers()

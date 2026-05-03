@@ -1,0 +1,395 @@
+"""
+help_viewer.py — Help system for PK232PY.
+
+Provides:
+    HelpViewer   — QDialog that renders Markdown help files
+    show_help()  — convenience function to open help for a topic
+
+Architecture:
+    Help files are Markdown (.md) files in the help/ directory
+    relative to the package root. Each topic has its own file.
+
+    HelpViewer renders Markdown to HTML using Python's built-in
+    markdown module (or a simple fallback renderer if not available).
+
+    Tooltips for individual buttons are registered centrally via
+    the TooltipManager in tooltip_manager.py — this keeps tooltip
+    text out of the UI code and allows future localisation.
+
+Usage:
+    # Open help for a specific topic:
+    from .help_viewer import show_help
+    show_help("baudot", parent=self)
+
+    # From MacroEditDialog Help button:
+    show_help("baudot", anchor="macros", parent=self)
+
+Available topics (help/*.md files):
+    "baudot"    → help_baudot.md   (Baudot RTTY operation)
+    "shortcuts" → help_baudot.md#keyboard-shortcuts (anchor)
+    "macros"    → help_baudot.md#macros
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import logging
+
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout,
+    QPushButton, QTextBrowser, QLabel, QComboBox,
+)
+from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtGui import QFont, QDesktopServices
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Help file registry
+# ---------------------------------------------------------------------------
+
+# Maps topic name → (filename, optional anchor)
+HELP_TOPICS: dict[str, tuple[str, str]] = {
+    "baudot":    ("help_baudot.md", ""),
+    "shortcuts": ("help_baudot.md", "keyboard-shortcuts"),
+    "macros":    ("help_baudot.md", "macros"),
+    "controls":  ("help_baudot.md", "control-characters"),
+    "rbaud":     ("help_baudot.md", "rbaud--transmission-speed"),
+}
+
+# Location of help files — relative to this module's directory
+_HELP_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "help")
+
+
+def _find_help_file(filename: str) -> str | None:
+    """Return absolute path to help file, or None if not found."""
+    path = os.path.normpath(os.path.join(_HELP_DIR, filename))
+    return path if os.path.isfile(path) else None
+
+
+# ---------------------------------------------------------------------------
+# Markdown → HTML converter
+# ---------------------------------------------------------------------------
+
+def _md_to_html(md_text: str) -> str:
+    """Convert Markdown to HTML.
+
+    Tries the 'markdown' package first (pip install markdown).
+    Falls back to a simple built-in converter if not available.
+    """
+    try:
+        import markdown as _md
+        html = _md.markdown(
+            md_text,
+            extensions=["tables", "fenced_code", "toc"],
+        )
+    except ImportError:
+        html = _simple_md_to_html(md_text)
+
+    # Wrap in styled HTML document
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+    background-color: #1e2830;
+    color: #d0e4f4;
+    margin: 16px;
+    line-height: 1.5;
+  }}
+  h1 {{ color: #88ccff; font-size: 18px; border-bottom: 1px solid #334455; padding-bottom: 4px; }}
+  h2 {{ color: #88ccff; font-size: 15px; margin-top: 20px; border-bottom: 1px solid #334455; padding-bottom: 2px; }}
+  h3 {{ color: #aaddff; font-size: 13px; margin-top: 14px; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
+  th {{ background-color: #2a3a4a; color: #88ccff; padding: 4px 8px;
+        border: 1px solid #334455; text-align: left; }}
+  td {{ padding: 4px 8px; border: 1px solid #334455; }}
+  tr:nth-child(even) {{ background-color: #232d37; }}
+  code {{ background-color: #2a3a4a; color: #ffee88;
+          padding: 1px 4px; border-radius: 3px;
+          font-family: 'Courier New', monospace; font-size: 12px; }}
+  pre  {{ background-color: #2a3a4a; color: #ffee88; padding: 8px;
+          border-radius: 4px; font-family: 'Courier New', monospace;
+          font-size: 12px; overflow-x: auto; }}
+  pre code {{ background: none; padding: 0; }}
+  hr   {{ border: none; border-top: 1px solid #334455; margin: 16px 0; }}
+  a    {{ color: #88ccff; }}
+  strong {{ color: #ffffff; }}
+  em   {{ color: #aaddff; }}
+  ul, ol {{ margin: 4px 0; padding-left: 24px; }}
+  li   {{ margin: 2px 0; }}
+  blockquote {{ border-left: 3px solid #445566; margin: 8px 0;
+                padding: 4px 12px; color: #aabbcc; }}
+</style>
+</head>
+<body>
+{html}
+</body>
+</html>"""
+
+
+def _simple_md_to_html(md: str) -> str:
+    """Minimal Markdown → HTML converter (no external dependencies).
+
+    Handles: headings, bold, italic, code, tables, hr, lists.
+    """
+    lines = md.split('\n')
+    html_lines = []
+    in_table = False
+    in_code  = False
+    in_list  = False
+
+    def _inline(text: str) -> str:
+        # code spans
+        text = re.sub(r'`([^`]+)`',
+                      r'<code>\1</code>', text)
+        # bold
+        text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
+        # italic
+        text = re.sub(r'\*(.+?)\*', r'<em>\1</em>', text)
+        # links
+        text = re.sub(r'\[([^\]]+)\]\(([^)]+)\)',
+                      r'<a href="\2">\1</a>', text)
+        return text
+
+    for line in lines:
+        # Fenced code blocks
+        if line.startswith('```'):
+            if in_code:
+                html_lines.append('</pre>')
+                in_code = False
+            else:
+                if in_list:
+                    html_lines.append('</ul>')
+                    in_list = False
+                html_lines.append('<pre><code>')
+                in_code = True
+            continue
+        if in_code:
+            html_lines.append(line.replace('&', '&amp;')
+                              .replace('<', '&lt;').replace('>', '&gt;'))
+            continue
+
+        # Headings
+        m = re.match(r'^(#{1,3})\s+(.+)', line)
+        if m:
+            if in_list: html_lines.append('</ul>'); in_list = False
+            level = len(m.group(1))
+            html_lines.append(f'<h{level}>{_inline(m.group(2))}</h{level}>')
+            continue
+
+        # HR
+        if re.match(r'^---+$', line.strip()):
+            html_lines.append('<hr>')
+            continue
+
+        # Table rows
+        if '|' in line and line.strip().startswith('|'):
+            if not in_table:
+                if in_list: html_lines.append('</ul>'); in_list = False
+                html_lines.append('<table>')
+                in_table = True
+                cells = [c.strip() for c in line.strip().strip('|').split('|')]
+                html_lines.append('<tr>' +
+                    ''.join(f'<th>{_inline(c)}</th>' for c in cells) + '</tr>')
+            elif re.match(r'^[|\s\-:]+$', line):
+                pass  # separator row — skip
+            else:
+                cells = [c.strip() for c in line.strip().strip('|').split('|')]
+                html_lines.append('<tr>' +
+                    ''.join(f'<td>{_inline(c)}</td>' for c in cells) + '</tr>')
+            continue
+        else:
+            if in_table:
+                html_lines.append('</table>')
+                in_table = False
+
+        # List items
+        m = re.match(r'^[-*]\s+(.+)', line)
+        if m:
+            if not in_list:
+                html_lines.append('<ul>')
+                in_list = True
+            html_lines.append(f'<li>{_inline(m.group(1))}</li>')
+            continue
+
+        # Close list if needed
+        if in_list and not line.strip():
+            html_lines.append('</ul>')
+            in_list = False
+
+        # Blank line
+        if not line.strip():
+            html_lines.append('<p>')
+            continue
+
+        # Normal paragraph
+        html_lines.append(f'<p>{_inline(line)}</p>')
+
+    if in_list:  html_lines.append('</ul>')
+    if in_table: html_lines.append('</table>')
+    if in_code:  html_lines.append('</pre>')
+
+    return '\n'.join(html_lines)
+
+
+# ---------------------------------------------------------------------------
+# HelpViewer dialog
+# ---------------------------------------------------------------------------
+
+class HelpViewer(QDialog):
+    """Modal help viewer that renders Markdown help files as HTML.
+
+    Features:
+    - Renders help_baudot.md (and future help files)
+    - Topic selector dropdown for navigation between topics
+    - Back/Forward navigation
+    - Internal anchor links work (e.g. #macros, #keyboard-shortcuts)
+    - External links open in the system browser
+
+    Usage:
+        viewer = HelpViewer(topic="baudot", parent=self)
+        viewer.exec()
+    """
+
+    def __init__(self, topic: str = "baudot", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("PK232PY Help")
+        self.setMinimumSize(700, 560)
+        self.resize(760, 600)
+        self.setModal(True)
+        self._current_topic = topic
+        self._build_ui()
+        self._load_topic(topic)
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setSpacing(6)
+        root.setContentsMargins(10, 10, 10, 10)
+
+        # ── Top bar: topic selector + nav buttons ─────────────────────
+        top = QHBoxLayout()
+
+        lbl = QLabel("Topic:")
+        lbl.setFixedWidth(45)
+        top.addWidget(lbl)
+
+        self._topic_combo = QComboBox()
+        self._topic_combo.setFixedWidth(200)
+        for key, (fname, anchor) in HELP_TOPICS.items():
+            label = key.replace("-", " ").replace("_", " ").title()
+            self._topic_combo.addItem(label, key)
+        self._topic_combo.currentIndexChanged.connect(self._on_topic_changed)
+        top.addWidget(self._topic_combo)
+        top.addStretch()
+
+        self._btn_close = QPushButton("Close")
+        self._btn_close.setFixedWidth(80)
+        self._btn_close.clicked.connect(self.accept)
+        top.addWidget(self._btn_close)
+        root.addLayout(top)
+
+        # ── Browser ───────────────────────────────────────────────────
+        self._browser = QTextBrowser()
+        self._browser.setFont(QFont("Segoe UI", 10))
+        self._browser.setOpenLinks(False)   # handle links ourselves
+        self._browser.anchorClicked.connect(self._on_link_clicked)
+        root.addWidget(self._browser)
+
+        # ── Status bar ────────────────────────────────────────────────
+        self._status = QLabel("")
+        self._status.setFont(QFont("Segoe UI", 8))
+        self._status.setStyleSheet("color: #667788;")
+        root.addWidget(self._status)
+
+    def _load_topic(self, topic: str) -> None:
+        """Load and render a help topic."""
+        if topic not in HELP_TOPICS:
+            self._browser.setHtml(
+                f"<p>Help topic <b>{topic}</b> not found.</p>"
+            )
+            return
+
+        filename, anchor = HELP_TOPICS[topic]
+        path = _find_help_file(filename)
+
+        if path is None:
+            self._browser.setHtml(
+                f"<p>Help file <b>{filename}</b> not found.<br>"
+                f"Expected location: {os.path.normpath(_HELP_DIR)}</p>"
+            )
+            self._status.setText(f"File not found: {filename}")
+            return
+
+        try:
+            with open(path, encoding="utf-8") as f:
+                md_text = f.read()
+        except OSError as e:
+            self._browser.setHtml(f"<p>Error reading help file: {e}</p>")
+            return
+
+        html = _md_to_html(md_text)
+        self._browser.setHtml(html)
+
+        # Scroll to anchor if specified
+        if anchor:
+            self._browser.scrollToAnchor(anchor)
+
+        self._status.setText(f"{filename}")
+        self._current_topic = topic
+
+        # Sync combo
+        for i in range(self._topic_combo.count()):
+            if self._topic_combo.itemData(i) == topic:
+                self._topic_combo.blockSignals(True)
+                self._topic_combo.setCurrentIndex(i)
+                self._topic_combo.blockSignals(False)
+                break
+
+    def _on_topic_changed(self, index: int) -> None:
+        topic = self._topic_combo.itemData(index)
+        if topic:
+            self._load_topic(topic)
+
+    def _on_link_clicked(self, url: QUrl) -> None:
+        """Handle link clicks — internal anchors vs external URLs."""
+        url_str = url.toString()
+        if url_str.startswith('#'):
+            # Internal anchor
+            self._browser.scrollToAnchor(url_str[1:])
+        elif url_str.startswith('http'):
+            # External link — open in system browser
+            QDesktopServices.openUrl(url)
+        else:
+            logger.debug("Unhandled link: %s", url_str)
+
+
+# ---------------------------------------------------------------------------
+# Convenience function
+# ---------------------------------------------------------------------------
+
+def show_help(topic: str = "baudot", anchor: str = "",
+              parent=None) -> None:
+    """Open the help viewer for the given topic.
+
+    Args:
+        topic:  Topic key from HELP_TOPICS (e.g. "baudot", "macros")
+        anchor: Optional section anchor (overrides HELP_TOPICS default)
+        parent: Parent widget for the dialog
+    """
+    # Override anchor if specified
+    if anchor and topic in HELP_TOPICS:
+        filename = HELP_TOPICS[topic][0]
+        # Temporarily patch the anchor — viewer reads from HELP_TOPICS
+        orig = HELP_TOPICS[topic]
+        HELP_TOPICS[topic] = (filename, anchor)
+        viewer = HelpViewer(topic=topic, parent=parent)
+        viewer.exec()
+        HELP_TOPICS[topic] = orig
+    else:
+        viewer = HelpViewer(topic=topic, parent=parent)
+        viewer.exec()

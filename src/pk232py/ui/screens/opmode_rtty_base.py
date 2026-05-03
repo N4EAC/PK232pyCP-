@@ -1,60 +1,64 @@
 """
-opmode_rtty_base.py – Gemeinsame Basisklasse für RTTY-artige Opmode-Screens.
+opmode_rtty_base.py — Shared base class for RTTY-type opmode screens.
 
-Verwendet von:
-  baudot_screen.py  → BaudotScreen(RttyBaseScreen)
-  ascii_screen.py   → AsciiScreen(RttyBaseScreen)
+Used by:
+    baudot_screen.py  → BaudotScreen(RttyBaseScreen)
+    ascii_screen.py   → AsciiScreen(RttyBaseScreen)
 
-Was die Basisklasse enthält (alles Gemeinsame):
-  - Stil-Konstanten
-  - MacroStore  (Laden/Speichern Macro.txt)
-  - MacroEditDialog
-  - RttyBaseScreen
-      • Titel-Label         (wird von Unterklasse gesetzt)
-      • RBAUD-Dropdown
-      • Reihe 1: SEND / RECEIVE (prominent, blinkend)
-      • Reihe 2: mode_buttons() — abstrakt, von Unterklasse implementiert
-      • RX-Fenster
-      • TX-Fenster (5 Zeilen)
-      • Macro-Sektion
+What the base class provides:
+    - Title label (left) + UTC clock (right)
+    - RBAUD dropdown (overridable via class attributes)
+    - Row 1: SEND / RECEIVE buttons (prominent, blinking)
+    - Row 2: mode-specific buttons via _build_mode_buttons() — subclass implements
+    - RX window (expands vertically)
+    - TX window (5 lines, block cursor, initial focus)
+    - Macro bar (6 macros + Edit Macros)
+    - EventFilter: all keypresses redirect to TX window
 
-Was die Unterklasse liefert:
-  - MODE_TITLE : str          z.B. "Baudot" oder "ASCII RTTY"
-  - _build_mode_buttons(layout) : baut Reihe 2 in den übergebenen QHBoxLayout
+What the subclass provides:
+    - MODE_TITLE : str          e.g. "Baudot" or "ASCII RTTY"
+    - _build_mode_buttons(layout: QHBoxLayout) — fills row 2
+
+Refactored 2026-05-03:
+    Theme system  → ui_theme.py
+    MacroStore    → macro_store.py
+    TX controller → baudot_tx_controller.py
 """
 
-import os
+from __future__ import annotations
+
 from datetime import datetime, timezone
 from PyQt6.QtWidgets import (
-    QWidget, QDialog, QScrollArea, QFrame,
+    QWidget, QApplication,
     QVBoxLayout, QHBoxLayout, QLabel,
-    QTextEdit, QLineEdit, QPushButton,
-    QComboBox, QSizePolicy, QMessageBox,
+    QTextEdit, QPushButton,
+    QComboBox, QSizePolicy, QFrame,
 )
-from PyQt6.QtCore import Qt, QTimer, QEvent
-from PyQt6.QtGui import QFont, QKeyEvent
+from PyQt6.QtCore import QMimeData
+from PyQt6.QtCore import pyqtSignal, Qt, QTimer, QEvent
+from PyQt6.QtGui import QFont, QKeyEvent, QTextCursor, QTextCharFormat, QColor
 
+from .ui_theme import (
+    get_theme, set_theme, apply_app_style,
+    style_rx_widget, style_tx_widget,
+    THEMES,
+)
+from .macro_store import MacroStore, MacroEditDialog, MACRO_COUNT, add_hline
 
 # ---------------------------------------------------------------------------
-# Layout-Konstanten  (für alle RTTY-Screens gleich)
+# Layout constants (same across all RTTY screens)
 # ---------------------------------------------------------------------------
 
 BTN_W      = 90
 SPACING    = 6
-ROW2_TOTAL = 7 * BTN_W + 6 * SPACING   # 7 Buttons in Reihe 2
+ROW2_TOTAL = 7 * BTN_W + 6 * SPACING
 PROM_W     = (ROW2_TOTAL - SPACING) // 2
 
-MACRO_COUNT    = 6
-MACRO_NAME_MAX = 10
-MACRO_TEXT_MAX = 200
-MACRO_FILE     = "Macro.txt"
-
-# RBAUD-Werte gelten für Baudot UND ASCII
-RBAUD_VALUES = ["45", "50", "57", "75", "100", "110", "150", "200", "300"]
-
+# RBAUD values for Baudot and ASCII
+RBAUD_VALUES = ["45", "50", "75", "100", "110", "150", "200", "300"]
 
 # ---------------------------------------------------------------------------
-# Stile
+# Button styles
 # ---------------------------------------------------------------------------
 
 STYLE_PROM_INACTIVE = (
@@ -86,22 +90,17 @@ STYLE_RECEIVE_ON = (
     "}"
 )
 
-
 # ---------------------------------------------------------------------------
-# Hilfs-Funktionen  (werden von Screen und Dialog benutzt)
+# Helper functions
 # ---------------------------------------------------------------------------
 
 def make_toggle_button(label: str) -> QPushButton:
-    """Kleiner Toggle-Button: grün = ON, grau = OFF.
-
-    NoFocus: Ein Mausklick auf diesen Button gibt ihm NIEMALS den
-    Keyboard-Focus – der Cursor im TX-Fenster bleibt aktiv.
-    """
+    """Small toggle button: green = ON, grey = OFF. NoFocus policy."""
     btn = QPushButton(label)
     btn.setCheckable(True)
     btn.setChecked(False)
     btn.setFixedWidth(BTN_W)
-    btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # ← kein Focus-Raub
+    btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
     _apply_toggle_style(btn)
     btn.toggled.connect(lambda _c, b=btn: _apply_toggle_style(b))
     return btn
@@ -120,491 +119,325 @@ def _apply_toggle_style(btn: QPushButton) -> None:
         )
 
 
-def add_hline(layout) -> None:
-    """Fügt eine horizontale Trennlinie in ein QVBoxLayout ein."""
-    line = QFrame()
-    line.setFrameShape(QFrame.Shape.HLine)
-    line.setFrameShadow(QFrame.Shadow.Sunken)
-    layout.addWidget(line)
-
 
 # ---------------------------------------------------------------------------
-# Theme-System
+# TxInputWidget — TX input field with edit protection and ACK colouring
 # ---------------------------------------------------------------------------
 
-# Zwei vordefinierte Themes.
-# Jedes Theme ist ein Dict mit allen relevanten Farb- und Stil-Schlüsseln.
-# TX_COLOR / RX_COLOR: Textfarbe im TX- bzw. RX-Fenster.
-# Screens die TX/RX-Fenster bauen, lesen diese Werte über get_theme().
+class TxInputWidget(QTextEdit):
+    """TX input QTextEdit with char-level ACK tracking.
 
-THEMES: dict[str, dict] = {
-    "dark": {
-        "name":              "Dark",
-        # Fenster / Widgets
-        "bg_window":         "#1e2830",
-        "bg_widget":         "#1e2830",
-        "bg_input":          "#1a2430",
-        "bg_input_tx":       "#1a2c1a",   # TX-Fenster: leicht grünlich
-        "bg_button":         "#445566",
-        "bg_button_hover":   "#556677",
-        "bg_button_pressed": "#334455",
-        "bg_button_dis":     "#333333",
-        "bg_spin":           "#2a3a4a",
-        "bg_combo":          "#2a3a4a",
-        "bg_line":           "#1e2830",
-        "bg_tooltip":        "#2a3a4a",
-        # Text
-        "fg_label":          "#d0e4f4",
-        "fg_button":         "#ffffff",
-        "fg_button_dis":     "#666666",
-        "fg_groupbox":       "#ccddee",
-        "fg_checkbox":       "#d0e4f4",
-        "fg_spin":           "#ffffff",
-        "fg_combo":          "#ffffff",
-        "fg_line":           "#ffffff",
-        "fg_tooltip":        "#d0e4f4",
-        # RX / TX Textfarben (das Herzstück der Unterscheidung)
-        "rx_color":          "#88ccff",   # hellblau  — empfangener Text
-        "tx_color":          "#ffee88",   # hellgelb  — gesendeter Text
-        # Rahmen
-        "border_input":      "#334455",
-        "border_button":     "#334455",
-        "border_spin":       "#445566",
-        "border_tooltip":    "#556677",
-    },
-    "light": {
-        "name":              "Light",
-        # Fenster / Widgets
-        "bg_window":         "#f0f0f0",
-        "bg_widget":         "#f0f0f0",
-        "bg_input":          "#ffffff",
-        "bg_input_tx":       "#f0fff0",   # TX-Fenster: leicht grünlich
-        "bg_button":         "#d0d8e0",
-        "bg_button_hover":   "#c0c8d8",
-        "bg_button_pressed": "#a0b0c0",
-        "bg_button_dis":     "#e0e0e0",
-        "bg_spin":           "#ffffff",
-        "bg_combo":          "#ffffff",
-        "bg_line":           "#ffffff",
-        "bg_tooltip":        "#ffffcc",
-        # Text
-        "fg_label":          "#1a1a2e",
-        "fg_button":         "#1a1a2e",
-        "fg_button_dis":     "#909090",
-        "fg_groupbox":       "#1a1a2e",
-        "fg_checkbox":       "#1a1a2e",
-        "fg_spin":           "#000000",
-        "fg_combo":          "#000000",
-        "fg_line":           "#000000",
-        "fg_tooltip":        "#333333",
-        # RX / TX Textfarben
-        "rx_color":          "#000080",   # dunkelblau — empfangener Text
-        "tx_color":          "#006600",   # dunkelgrün — gesendeter Text
-        # Rahmen
-        "border_input":      "#a0a8b0",
-        "border_button":     "#a0a8b0",
-        "border_spin":       "#a0a8b0",
-        "border_tooltip":    "#c8c800",
-    },
-}
+    Extends QTextEdit with:
+    - char_typed signal — fired on every printable keystroke and paste
+    - colour_at()       — inverse-colours one char after DATA_ACK
+    - set_cycle_anchor() — updates doc position anchor for colour_at()
+    - Edit protection   — already-sent chars (inverse green) cannot be modified
+    - CTRL+D            — inserts [^D] EOT marker (char = \x04)
+    - insertFromMimeData — paste fires char_typed per character
 
-# Aktives Theme — kann zur Laufzeit gewechselt werden
-_current_theme: str = "dark"
-
-
-def get_theme() -> dict:
-    """Gibt das aktuell aktive Theme-Dict zurück."""
-    return THEMES[_current_theme]
-
-
-def set_theme(name: str) -> None:
-    """Setzt das aktive Theme ('dark' oder 'light')."""
-    global _current_theme
-    if name in THEMES:
-        _current_theme = name
-
-
-def apply_app_style(app, theme: str = "dark") -> None:
-    """Wendet das gewählte Theme als globales QApplication-Stylesheet an.
-
-    Aufruf in jeder main()-Funktion:
-        app = QApplication(sys.argv)
-        app.setStyle("Fusion")
-        apply_app_style(app, "dark")   # oder "light"
-
-    Args:
-        app:   Die QApplication-Instanz.
-        theme: Theme-Name: "dark" (Standard) oder "light".
-    """
-    set_theme(theme)
-    t = get_theme()
-
-    app.setStyleSheet(
-        f"QWidget {{ background-color: {t['bg_window']}; }}"
-
-        f"QPushButton {{"
-        f"  background-color: {t['bg_button']};"
-        f"  color: {t['fg_button']};"
-        f"  border: 1px solid {t['border_button']};"
-        f"  border-radius: 4px;"
-        f"  padding: 4px 8px;"
-        f"}}"
-        f"QPushButton:hover {{ background-color: {t['bg_button_hover']}; }}"
-        f"QPushButton:pressed {{ background-color: {t['bg_button_pressed']}; }}"
-        f"QPushButton:disabled {{"
-        f"  background-color: {t['bg_button_dis']};"
-        f"  color: {t['fg_button_dis']};"
-        f"  border: 1px solid {t['border_button']};"
-        f"}}"
-
-        f"QLabel {{ color: {t['fg_label']}; }}"
-        f"QCheckBox {{ color: {t['fg_checkbox']}; }}"
-        f"QGroupBox {{ color: {t['fg_groupbox']}; }}"
-
-        f"QSpinBox {{"
-        f"  background-color: {t['bg_spin']};"
-        f"  color: {t['fg_spin']};"
-        f"  border: 1px solid {t['border_spin']};"
-        f"  border-radius: 3px;"
-        f"}}"
-
-        f"QComboBox {{"
-        f"  background-color: {t['bg_combo']};"
-        f"  color: {t['fg_combo']};"
-        f"  border: 1px solid {t['border_spin']};"
-        f"  border-radius: 3px;"
-        f"  padding: 2px;"
-        f"}}"
-        f"QComboBox QAbstractItemView {{"
-        f"  background-color: {t['bg_combo']};"
-        f"  color: {t['fg_combo']};"
-        f"}}"
-
-        f"QLineEdit {{"
-        f"  background-color: {t['bg_line']};"
-        f"  color: {t['fg_line']};"
-        f"  border: 1px solid {t['border_input']};"
-        f"  border-radius: 3px;"
-        f"  padding: 2px;"
-        f"}}"
-
-        # QTextEdit bekommt KEIN generisches Stylesheet —
-        # RX und TX werden individuell per Klasse gesteuert (siehe unten)
-        f"QTextEdit {{"
-        f"  border: 1px solid {t['border_input']};"
-        f"}}"
-
-        f"QToolTip {{"
-        f"  background-color: {t['bg_tooltip']};"
-        f"  color: {t['fg_tooltip']};"
-        f"  border: 1px solid {t['border_tooltip']};"
-        f"}}"
-    )
-
-
-def style_rx_widget(widget) -> None:
-    """Wendet RX-Farben auf ein QTextEdit an (nach apply_app_style aufrufen).
-
-    Args:
-        widget: Ein QTextEdit das als RX-Fenster dient.
-    """
-    t = get_theme()
-    widget.setStyleSheet(
-        f"QTextEdit {{"
-        f"  background-color: {t['bg_input']};"
-        f"  color: {t['rx_color']};"
-        f"  border: 1px solid {t['border_input']};"
-        f"}}"
-    )
-
-
-def style_tx_widget(widget) -> None:
-    """Wendet TX-Farben auf ein QTextEdit an und setzt einen Block-Cursor.
-
-    Der Block-Cursor (breiter, blinkender Balken) ist im Amateurfunk-Betrieb
-    deutlich besser sichtbar als der Standard-Liniencursor — besonders beim
-    schnellen Wechsel zwischen Buttons und Tastatureingabe.
-
-    Args:
-        widget: Ein QTextEdit das als TX-Fenster dient.
-    """
-    t = get_theme()
-    widget.setStyleSheet(
-        f"QTextEdit {{"
-        f"  background-color: {t['bg_input_tx']};"
-        f"  color: {t['tx_color']};"
-        f"  border: 1px solid {t['border_input']};"
-        f"}}"
-    )
-    # Block-Cursor: Breite = durchschnittliche Zeichenbreite der Schrift.
-    # Das ergibt einen gut sichtbaren, blinkenden Block statt einer dünnen Linie.
-    char_w = widget.fontMetrics().averageCharWidth()
-    widget.setCursorWidth(char_w)
-
-
-# ---------------------------------------------------------------------------
-# MacroStore
-# ---------------------------------------------------------------------------
-
-class MacroStore:
-    """Verwaltet 6 Macros (Name + Text) und deren Persistenz in Macro.txt.
-
-    Dateiformat (plain text, user-editierbar):
-        # Kommentarzeilen beginnen mit #
-        NAME|TEXT
-        ...
-
-    Escape-Regeln (damit eine Datenzeile immer genau eine Zeile in der Datei ist):
-        Zeichen im Text  →  gespeichert als
-        \\n  (LF)         →  \\n   (Backslash + n)
-        \\r  (CR)         →  \\r   (Backslash + r)
-        \\   (Backslash)  →  \\\\  (doppelter Backslash)
-        |                →  /    (Trennzeichen-Konflikt vermeiden)
-
-    Beim Laden werden diese Ersetzungen in umgekehrter Reihenfolge rückgängig gemacht.
-    Ein Benutzer der die Datei manuell bearbeitet kann Zeilenumbrüche im Text
-    ebenfalls als \\n schreiben — sie werden beim nächsten Laden korrekt interpretiert.
+    Colour conventions (theme-aware):
+        Unsent  : normal TX foreground (yellow/green depending on theme)
+        ACK'd   : white text on dark green background (inverse)
+        EOT [^D]: white text on orange background
     """
 
-    def __init__(self, path: str = MACRO_FILE):
-        self.path  = path
-        self.names = [f"Macro {i}" for i in range(1, MACRO_COUNT + 1)]
-        self.texts = [""] * MACRO_COUNT
-
-    def load(self) -> str:
-        """Gibt '' zurück bei Erfolg, sonst eine Fehlermeldung."""
-        if not os.path.isfile(self.path):
-            return f"Datei '{self.path}' nicht gefunden – Standardwerte werden verwendet."
-        try:
-            with open(self.path, encoding="utf-8") as fh:
-                lines = fh.readlines()
-        except OSError as exc:
-            return f"Lesefehler: {exc}"
-
-        data = [
-            ln.rstrip("\n") for ln in lines
-            if ln.strip() and not ln.startswith("#")
-        ]
-        for idx in range(MACRO_COUNT):
-            if idx >= len(data):
-                break
-            parts = data[idx].split("|", maxsplit=1)
-            self.names[idx] = self._unescape(parts[0])[:MACRO_NAME_MAX]
-            self.texts[idx] = self._unescape(
-                parts[1] if len(parts) > 1 else ""
-            )[:MACRO_TEXT_MAX]
-        return ""
-
-    def save(self) -> str:
-        """Gibt '' zurück bei Erfolg, sonst eine Fehlermeldung."""
-        header = (
-            "# PK232PY Macros\n"
-            f"# Format: NAME|TEXT  "
-            f"(Name max. {MACRO_NAME_MAX}, Text max. {MACRO_TEXT_MAX} Zeichen)\n"
-            "# Zeilenumbrüche im Text werden als \\n gespeichert.\n"
-            "# Diese Datei kann direkt mit einem Texteditor bearbeitet werden.\n#\n"
-        )
-        try:
-            with open(self.path, "w", encoding="utf-8") as fh:
-                fh.write(header)
-                for name, text in zip(self.names, self.texts):
-                    fh.write(f"{self._escape(name)}|{self._escape(text)}\n")
-        except OSError as exc:
-            return f"Schreibfehler: {exc}"
-        return ""
-
-    # ------------------------------------------------------------------
-    # Escape / Unescape  (statische Hilfsmethoden)
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _escape(value: str) -> str:
-        """Kodiert einen String für eine einzelne Dateizeile.
-
-        Reihenfolge ist wichtig: Backslash zuerst escapen,
-        sonst werden die neu eingefügten Backslashes selbst nochmal ersetzt.
-        """
-        value = value.replace("\\", "\\\\")   # \  →  \\
-        value = value.replace("\r", "\\r")    # CR →  \r
-        value = value.replace("\n", "\\n")    # LF →  \n
-        value = value.replace("|",  "/")      # |  →  /
-        return value
-
-    @staticmethod
-    def _unescape(value: str) -> str:
-        """Dekodiert einen aus der Datei gelesenen String.
-
-        Reihenfolge ist die Umkehrung von _escape:
-        Erst CR/LF wiederherstellen, dann doppelten Backslash auflösen.
-        """
-        # Temporären Platzhalter verwenden damit \\\n nicht falsch interpretiert wird
-        value = value.replace("\\\\", "\x00")  # \\  →  Platzhalter
-        value = value.replace("\\r",  "\r")    # \r  →  CR
-        value = value.replace("\\n",  "\n")    # \n  →  LF
-        value = value.replace("\x00", "\\")    # Platzhalter  →  \
-        return value
-
-
-# ---------------------------------------------------------------------------
-# MacroEditDialog
-# ---------------------------------------------------------------------------
-
-class MacroEditDialog(QDialog):
-    """Modaler Dialog: 6 Macros bearbeiten, speichern, laden."""
-
-    def __init__(self, store: MacroStore, parent=None):
-        super().__init__(parent)
-        self.store = store
-        self.setWindowTitle("Macros bearbeiten")
-        self.setMinimumWidth(620)
-        self.setModal(True)
-        self._build_ui()
-        self._populate()
-
-    def _build_ui(self) -> None:
-        root = QVBoxLayout(self)
-        root.setSpacing(8)
-        root.setContentsMargins(12, 12, 12, 12)
-
-        hdr = QLabel("Macro-Editor")
-        hdr.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
-        root.addWidget(hdr)
-        add_hline(root)
-
-        # Spalten-Header
-        hrow = QHBoxLayout()
-        for text, width in (("Name", 110), (f"Text  (max. {MACRO_TEXT_MAX} Zeichen)", None)):
-            lbl = QLabel(text)
-            lbl.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-            if width:
-                lbl.setFixedWidth(width)
-            hrow.addWidget(lbl)
-        root.addLayout(hrow)
-
-        # Scroll-Bereich mit den 6 Zeilen
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-        inner = QWidget()
-        inner_layout = QVBoxLayout(inner)
-        inner_layout.setSpacing(6)
-        inner_layout.setContentsMargins(0, 0, 0, 0)
-
-        self._name_edits: list[QLineEdit] = []
-        self._text_edits: list[QTextEdit] = []
-        mono = QFont("Courier New", 10)
-
-        for i in range(MACRO_COUNT):
-            row = QHBoxLayout()
-            row.setSpacing(8)
-
-            ne = QLineEdit()
-            ne.setFont(mono)
-            ne.setMaxLength(MACRO_NAME_MAX)
-            ne.setFixedWidth(110)
-            ne.setPlaceholderText(f"Macro {i+1}")
-            row.addWidget(ne)
-            self._name_edits.append(ne)
-
-            te = QTextEdit()
-            te.setFont(mono)
-            te.setAcceptRichText(False)
-            fm = te.fontMetrics()
-            mc = te.contentsMargins()
-            te.setFixedHeight(fm.lineSpacing() * 3 + mc.top() + mc.bottom() + 8)
-            te.textChanged.connect(lambda edit=te: self._limit_text(edit))
-            row.addWidget(te)
-            self._text_edits.append(te)
-
-            inner_layout.addLayout(row)
-
-        inner_layout.addStretch()
-        scroll.setWidget(inner)
-        root.addWidget(scroll)
-        add_hline(root)
-
-        # Buttons: Save / Load / Close
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(8)
-        for label, slot in (("Save", self._on_save), ("Load", self._on_load)):
-            b = QPushButton(label)
-            b.setFixedWidth(100)
-            b.clicked.connect(slot)
-            btn_row.addWidget(b)
-        btn_row.addStretch()
-        close_btn = QPushButton("Close")
-        close_btn.setFixedWidth(100)
-        close_btn.clicked.connect(self.accept)
-        btn_row.addWidget(close_btn)
-        root.addLayout(btn_row)
-
-    def _populate(self) -> None:
-        for i in range(MACRO_COUNT):
-            self._name_edits[i].setText(self.store.names[i])
-            self._text_edits[i].blockSignals(True)
-            self._text_edits[i].setPlainText(self.store.texts[i])
-            self._text_edits[i].blockSignals(False)
-
-    def _collect(self) -> None:
-        for i in range(MACRO_COUNT):
-            self.store.names[i] = self._name_edits[i].text()
-            self.store.texts[i] = self._text_edits[i].toPlainText()[:MACRO_TEXT_MAX]
-
-    @staticmethod
-    def _limit_text(te: QTextEdit) -> None:
-        text = te.toPlainText()
-        if len(text) > MACRO_TEXT_MAX:
-            cur = te.textCursor()
-            pos = cur.position()
-            te.blockSignals(True)
-            te.setPlainText(text[:MACRO_TEXT_MAX])
-            cur.setPosition(min(pos, MACRO_TEXT_MAX))
-            te.setTextCursor(cur)
-            te.blockSignals(False)
-
-    def _on_save(self) -> None:
-        self._collect()
-        err = self.store.save()
-        if err:
-            QMessageBox.warning(self, "Speichern fehlgeschlagen", err)
-        else:
-            QMessageBox.information(self, "Gespeichert",
-                                    f"Macros in '{self.store.path}' gespeichert.")
-
-    def _on_load(self) -> None:
-        err = self.store.load()
-        if err:
-            QMessageBox.warning(self, "Laden fehlgeschlagen", err)
-        else:
-            self._populate()
-            QMessageBox.information(self, "Geladen",
-                                    f"Macros aus '{self.store.path}' geladen.")
-
-
-# ---------------------------------------------------------------------------
-# RttyBaseScreen  –  abstrakte Basisklasse
-# ---------------------------------------------------------------------------
-
-class RttyBaseScreen(QWidget):
-    """Gemeinsames Layout für Baudot- und ASCII-RTTY-Screens.
-
-    Unterklassen MÜSSEN folgende Klassenattribute setzen:
-        MODE_TITLE : str   — wird als Titel-Label angezeigt
-
-    Unterklassen MÜSSEN folgende Methode implementieren:
-        _build_mode_buttons(layout: QHBoxLayout) -> None
-            Fügt die moduspezifischen Buttons in Reihe 2 ein.
-            Die Methode ist verantwortlich für addStretch() am Ende.
-    """
-
-    # Unterklasse kann diese Attribute überschreiben
-    MODE_TITLE:   str       = "RTTY"
-    BAUD_LABEL:   str       = "RBAUD (Speed):"
-    BAUD_VALUES:  list[str] = RBAUD_VALUES   # Default = Baudot-Werte aus Modul-Konstante
+    # Emitted on every printable keystroke and paste.
+    # Connected by MainWindow to BaudotTxController.on_char_typed().
+    char_typed = pyqtSignal(str, str)   # (char, display)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # MacroStore beim Start laden
+        self._doc_offset  = 0   # doc position of cycle start
+        self._cycle_start = 0   # _arr index of cycle start
+        self._doc_extra   = 0   # extra doc chars vs _arr entries (e.g. [^D] = 4 doc, 1 arr → +3)
+
+    def set_cycle_anchor(self, doc_offset: int, cycle_start: int) -> None:
+        """Update anchors for colour_at() positioning.
+
+        doc_offset must be the actual document character position
+        (tx.document().characterCount() - 1), NOT the _arr index.
+        This correctly accounts for multi-char visual markers like [^D].
+        """
+        import logging as _log
+        _log.getLogger('pk232py.ui.screens.opmode_rtty_base').debug(
+            "set_cycle_anchor: doc_offset=%d cycle_start=%d doc_chars=%d",
+            doc_offset, cycle_start,
+            self.document().characterCount() - 1
+        )
+        self._doc_offset  = doc_offset
+        self._cycle_start = cycle_start
+        self._doc_extra   = 0   # reset for next cycle
+
+    def colour_at(self, arr_idx: int, sent: bool = True) -> None:
+        """Colour one character at arr_idx.
+
+        sent=True  → inverse yellow: black text on yellow (ACK'd)
+        sent=False → normal TX colour (unsent)
+        """
+        doc_pos = self._doc_offset + (arr_idx - self._cycle_start)
+        if doc_pos < 0:
+            return
+        doc = self.document()
+        # Valid positions: 0 .. characterCount()-2
+        # characterCount()-1 is the block terminator — never addressable
+        if doc_pos >= doc.characterCount() - 1:
+            return
+        try:
+            c = QTextCursor(doc)
+            c.setPosition(doc_pos)
+            c.movePosition(QTextCursor.MoveOperation.Right,
+                           QTextCursor.MoveMode.KeepAnchor, 1)
+            if not c.hasSelection():
+                return
+        except Exception:
+            return
+        f = QTextCharFormat()
+        if sent:
+            # Inverse yellow — black text on yellow (sent & confirmed)
+            f.setForeground(QColor("#000000"))
+            f.setBackground(QColor("#ddaa00"))
+        else:
+            # Normal unsent: theme TX colour
+            t = get_theme()
+            f.setForeground(QColor(t["tx_color"]))
+            f.setBackground(QColor(t["bg_input_tx"]))
+        c.setCharFormat(f)
+
+    # ── Edit protection ───────────────────────────────────────────────
+
+    def _selection_touches_protected(self) -> bool:
+        """True if cursor or selection overlaps the protected (sent) zone."""
+        c = self.textCursor()
+        if not c.hasSelection():
+            # Backspace deletes char BEFORE cursor — protect if cursor
+            # is AT or BEFORE _doc_offset (would delete into sent zone)
+            return c.position() <= self._doc_offset
+        return min(c.position(), c.anchor()) < self._doc_offset
+
+    def _push_cursor_to_boundary(self) -> None:
+        """Move cursor to _doc_offset if it drifted into the protected zone."""
+        c = self.textCursor()
+        if c.position() < self._doc_offset:
+            c.setPosition(self._doc_offset)
+            self.setTextCursor(c)
+
+    # ── Paste handling ────────────────────────────────────────────────
+
+    def insertFromMimeData(self, source: QMimeData) -> None:
+        """Handle paste — emit char_typed for each pasted character.
+
+        Pre-truncates text at available buffer space before iterating.
+        This ensures BUFFER_FULL is emitted at most ONCE per paste,
+        regardless of how many characters exceed the limit.
+        """
+        if self._selection_touches_protected():
+            return
+        text = source.text()
+        if not text and source.hasHtml():
+            import re as _re
+            html = source.html()
+            text = _re.sub(r'<[^>]+>', '', html)
+            text = (text.replace('&amp;', '&').replace('&lt;', '<')
+                        .replace('&gt;', '>').replace('&nbsp;', ' ')
+                        .replace('&#13;', '\r').replace('&#10;', '\n'))
+        if not text:
+            return
+        text = text.replace('\r\n', '\n').replace('\r', '\n')
+        paste_chars = [ch for ch in text if ch == '\n' or ch.isprintable()]
+        if not paste_chars:
+            return
+
+        # Find BaudotTxController — stored directly on widget if wired,
+        # otherwise search parent chain as fallback.
+        ctrl = getattr(self, '_ctrl_ref', None)
+        if ctrl is None:
+            p = self.parent()
+            while p is not None:
+                c = getattr(p, '_baudot_ctrl', None)
+                if c is not None:
+                    ctrl = c
+                    self._ctrl_ref = ctrl   # cache for next paste
+                    break
+                try:
+                    p = p.parent()
+                except Exception:
+                    break
+
+        # Pre-truncate to available buffer space — emit BUFFER_FULL once
+        if ctrl is not None:
+            try:
+                pending = len(ctrl._arr) - ctrl._tx_sent_idx
+            except Exception:
+                pending = 0
+            space = ctrl.TX_MAX - max(0, pending)
+            if space <= 0:
+                ctrl.warning.emit("BUFFER_FULL")
+                return
+            if len(paste_chars) > space:
+                paste_chars = paste_chars[:space]
+                ctrl.warning.emit("BUFFER_FULL")
+
+        if not paste_chars:
+            return
+
+        t = get_theme()
+        f = QTextCharFormat()
+        f.setForeground(QColor(t['tx_color']))
+        for ch in paste_chars:
+            if ch == '\n':
+                self.setCurrentCharFormat(f)
+                c = self.textCursor()
+                c.insertBlock()
+                self.setTextCursor(c)
+                self.char_typed.emit('\r\n', '<CR/LF>\n')
+            else:
+                self.setCurrentCharFormat(f)
+                self.textCursor().insertText(ch)
+                self.char_typed.emit(ch, ch)
+
+    # ── Keystroke handling ────────────────────────────────────────────
+
+    def keyPressEvent(self, ev: QKeyEvent) -> None:
+        """Handle keypresses with edit protection and EOT marker support.
+
+        Protection: cursor/selection in sent zone (pos < _doc_offset)
+            → collapse to end, block Backspace/Delete.
+
+        CTRL+D: insert visible [^D] orange marker, emit char_typed(\x04).
+
+        All other printable keys: emit char_typed(char, char).
+        """
+        key  = ev.key()
+        text = ev.text()
+        mods = ev.modifiers()
+        Ctrl = Qt.KeyboardModifier.ControlModifier
+        t    = get_theme()
+
+        # Normal TX char format
+        f_normal = QTextCharFormat()
+        f_normal.setForeground(QColor(t['tx_color']))
+
+        # ── Cursor movement — allow but clamp to boundary ─────────────
+        if key in (Qt.Key.Key_Left, Qt.Key.Key_Home,
+                   Qt.Key.Key_Up, Qt.Key.Key_PageUp):
+            super().keyPressEvent(ev)
+            self._push_cursor_to_boundary()
+            return
+
+        # CTRL+D: insert [^D] EOT marker
+        if mods == Ctrl and key == Qt.Key.Key_D:
+            f_eot = QTextCharFormat()
+            f_eot.setForeground(QColor("#ffffff"))
+            f_eot.setBackground(QColor("#cc4400"))
+            f_eot.setFontWeight(700)
+            c = self.textCursor()
+            eot_doc_pos = c.position()
+            c.setCharFormat(f_eot)
+            c.insertText("[^D]")
+            c.setCharFormat(f_normal)
+            self.setTextCursor(c)
+            if not hasattr(self, "_eot_positions"):
+                self._eot_positions: list[int] = []
+            self._eot_positions.append(eot_doc_pos)
+            # [^D] = 4 doc chars but 1 _arr entry → 3 extra doc positions
+            self._doc_extra += 3
+            self.char_typed.emit("\x04", "[^D]")
+            return
+
+        # ── Any key touching protected zone ───────────────────────────
+        if self._selection_touches_protected():
+            if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete,
+                       Qt.Key.Key_Return, Qt.Key.Key_Enter) or (
+                       text and text.isprintable()):
+                # Move cursor to boundary (first editable position)
+                # and block destructive keys
+                c = self.textCursor()
+                c.setPosition(self._doc_offset)
+                self.setTextCursor(c)
+                if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+                    return
+            else:
+                super().keyPressEvent(ev)
+                return
+
+        # ── Backspace / Delete (outside protected zone) ───────────────
+        if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+            c = self.textCursor()
+            pos = c.position()
+            eot_positions = getattr(self, "_eot_positions", [])
+            # Check if cursor is right after a [^D] marker (4 chars).
+            # EOT marker at doc_pos p occupies chars p..p+3, cursor at p+4.
+            eot_hit = None
+            for eot_pos in eot_positions:
+                if pos == eot_pos + 4:
+                    eot_hit = eot_pos
+                    break
+            if eot_hit is not None:
+                # Delete all 4 chars of [^D] atomically
+                c.setPosition(eot_hit)
+                c.setPosition(eot_hit + 4, QTextCursor.MoveMode.KeepAnchor)
+                c.removeSelectedText()
+                self._eot_positions.remove(eot_hit)
+                # Adjust tracked positions of EOT markers that come after
+                self._eot_positions = [
+                    p - 4 if p > eot_hit else p
+                    for p in self._eot_positions
+                ]
+                # Restore the 3 extra doc positions
+                self._doc_extra = max(0, self._doc_extra - 3)
+                # Notify controller: BS sentinel for the whole EOT (1 _arr entry)
+                self.char_typed.emit('\x08', '')
+            else:
+                # Normal backspace — notify controller then delete
+                self.char_typed.emit('\x08', '')
+                super().keyPressEvent(ev)
+                # Adjust EOT positions after cursor
+                self._eot_positions = [
+                    p - 1 if p >= pos else p
+                    for p in getattr(self, "_eot_positions", [])
+                ]
+            return
+
+        # ── Enter / printable characters ──────────────────────────────
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.setCurrentCharFormat(f_normal)
+            super().keyPressEvent(ev)
+            self.char_typed.emit('\r\n', '<CR/LF>\n')
+        elif text and text.isprintable():
+            self.setCurrentCharFormat(f_normal)
+            super().keyPressEvent(ev)
+            self.char_typed.emit(text, text)
+        else:
+            super().keyPressEvent(ev)
+
+# ---------------------------------------------------------------------------
+# RttyBaseScreen — abstract base class
+# ---------------------------------------------------------------------------
+
+class RttyBaseScreen(QWidget):
+    """Shared layout for Baudot and ASCII RTTY screens.
+
+    Subclasses MUST set:
+        MODE_TITLE : str
+
+    Subclasses MUST implement:
+        _build_mode_buttons(layout: QHBoxLayout) -> None
+            Fills row 2 with mode-specific buttons.
+            Must call layout.addStretch() at the end.
+    """
+
+    MODE_TITLE:  str       = "RTTY"
+    BAUD_LABEL:  str       = "RBAUD (Speed):"
+    BAUD_VALUES: list[str] = RBAUD_VALUES
+
+    # Signals connected by MainWindow
+    char_ready   = pyqtSignal(str)   # keypress while SEND active
+    clear_tx_req = pyqtSignal()
+    clear_rx_req = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
         self._macro_store = MacroStore()
         err = self._macro_store.load()
         if err:
@@ -615,81 +448,55 @@ class RttyBaseScreen(QWidget):
         self._blink_timer.setInterval(400)
         self._blink_timer.timeout.connect(self._on_blink_tick)
 
-        # UTC-Uhr — aktualisiert jede Sekunde
         self._utc_timer = QTimer(self)
         self._utc_timer.setInterval(1000)
         self._utc_timer.timeout.connect(self._update_utc)
         self._utc_timer.start()
 
         self._build_ui()
-
-        # Nach dem UI-Aufbau: TX-Fenster als dauerhaften Focus-Inhaber installieren.
-        # installEventFilter(self) auf dem gesamten Fenster fängt alle
-        # KeyPress-Events ab, die nicht von einem Eingabe-Widget konsumiert werden.
         self.installEventFilter(self)
-
-        # Initialer Focus: TX-Fenster bekommt den Cursor sofort beim Öffnen.
-        # singleShot(0) wartet einen Event-Loop-Durchlauf — erst dann ist das
-        # Widget vollständig gerendert und setFocus() greift zuverlässig.
         QTimer.singleShot(0, lambda: self.tx_input.setFocus())
 
     # ------------------------------------------------------------------
-    # Hilfsmethode: Button ohne Focus-Raub erzeugen
+    # NoFocus button helper
     # ------------------------------------------------------------------
 
     @staticmethod
     def _no_focus_btn(label: str, width: int | None = None,
                       height: int | None = None,
                       checkable: bool = False) -> QPushButton:
-        """Erzeugt einen QPushButton mit NoFocus-Policy.
+        """Create a QPushButton with NoFocus policy.
 
-        NoFocus bedeutet: Ein Mausklick aktiviert den Button, gibt ihm
-        aber KEINEN Keyboard-Focus.  Der Cursor im TX-Fenster bleibt
-        dadurch immer aktiv – Tastendrücke landen sofort als TX-Eingabe.
-
-        Verwendung:
-            btn = self._no_focus_btn("STBY", width=BTN_W)
+        NoFocus means: a mouse click activates the button but does NOT
+        steal keyboard focus from the TX window.
         """
         btn = QPushButton(label)
         btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setCheckable(checkable)
         if width is not None:
             btn.setFixedWidth(width)
         if height is not None:
             btn.setFixedHeight(height)
-        if checkable:
-            btn.setCheckable(True)
         return btn
 
     # ------------------------------------------------------------------
-    # Event-Filter: leitet Tastendrücke ans TX-Fenster weiter
+    # EventFilter: redirect all keypresses to TX window
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event) -> bool:
-        """Sicherheitsnetz: jeder Tastendruck landet im TX-Fenster.
-
-        Wird ein KeyPress-Event von einem Widget ausgelöst, das KEIN
-        Texteingabe-Widget ist (QTextEdit / QLineEdit), leiten wir das
-        Event direkt ans TX-Fenster weiter.
-
-        Das greift auch dann, wenn ein Button versehentlich doch Focus
-        bekommen hat (z.B. per Tab-Taste).
-        """
         if event.type() == QEvent.Type.KeyPress:
             focused = self.focusWidget()
-            # Wenn der Focus bereits in einem Eingabefeld ist → normal weiter
+            from PyQt6.QtWidgets import QTextEdit, QLineEdit
             if isinstance(focused, (QTextEdit, QLineEdit)):
                 return super().eventFilter(obj, event)
-            # Sonst: Event ans TX-Fenster schicken, falls vorhanden
-            if hasattr(self, "tx_input") and self.tx_input is not None:
+            if hasattr(self, 'tx_input') and self.tx_input is not None:
                 self.tx_input.setFocus()
-                # Event an das TX-Fenster weiterleiten
-                from PyQt6.QtWidgets import QApplication
                 QApplication.sendEvent(self.tx_input, event)
-                return True   # Event als behandelt markieren
+                return True
         return super().eventFilter(obj, event)
 
     # ------------------------------------------------------------------
-    # UI-Aufbau  (einmalig beim Initialisieren)
+    # UI build
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
@@ -697,7 +504,7 @@ class RttyBaseScreen(QWidget):
         root.setSpacing(6)
         root.setContentsMargins(8, 8, 8, 8)
 
-        # Titelzeile: Modusname links, UTC-Zeit rechts
+        # Title row: mode name left, UTC clock right
         title_row = QHBoxLayout()
         title = QLabel(self.MODE_TITLE)
         title.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
@@ -706,13 +513,13 @@ class RttyBaseScreen(QWidget):
         self.lbl_utc = QLabel()
         self.lbl_utc.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
         self.lbl_utc.setAlignment(Qt.AlignmentFlag.AlignRight)
-        self._update_utc()   # Sofort befüllen, nicht erst nach 1 Sekunde warten
+        self._update_utc()
         title_row.addWidget(self.lbl_utc)
         root.addLayout(title_row)
 
         add_hline(root)
 
-        # Baud-Parameter (Label und Werte kommen vom Klassenattribut der Unterklasse)
+        # Baud parameter row
         param_row = QHBoxLayout()
         param_row.setSpacing(8)
         lbl = QLabel(self.BAUD_LABEL)
@@ -728,23 +535,23 @@ class RttyBaseScreen(QWidget):
 
         add_hline(root)
 
-        # Reihe 1: SEND / RECEIVE (prominent)
+        # Row 1: SEND / RECEIVE (prominent)
         row1 = QHBoxLayout()
         row1.setSpacing(SPACING)
 
-        self.btn_send = QPushButton("Send")
+        self.btn_send = QPushButton("Send  [ALT+X]")
         self.btn_send.setFixedWidth(PROM_W)
         self.btn_send.setFixedHeight(46)
         self.btn_send.setCheckable(True)
-        self.btn_send.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # kein Focus-Raub
+        self.btn_send.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_send.setStyleSheet(STYLE_PROM_INACTIVE)
         self.btn_send.toggled.connect(self._on_send_toggled)
 
-        self.btn_receive = QPushButton("Receive")
+        self.btn_receive = QPushButton("Receive  [ALT+R]")
         self.btn_receive.setFixedWidth(PROM_W)
         self.btn_receive.setFixedHeight(46)
         self.btn_receive.setCheckable(True)
-        self.btn_receive.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # kein Focus-Raub
+        self.btn_receive.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_receive.setStyleSheet(STYLE_PROM_INACTIVE)
         self.btn_receive.toggled.connect(self._on_receive_toggled)
 
@@ -753,19 +560,19 @@ class RttyBaseScreen(QWidget):
         row1.addStretch()
         root.addLayout(row1)
 
-        # Reihe 2: moduspezifische Buttons — von Unterklasse befüllt
+        # Row 2: mode-specific buttons — filled by subclass
         row2 = QHBoxLayout()
         row2.setSpacing(SPACING)
-        self._build_mode_buttons(row2)   # ← Unterklasse überschreibt das
+        self._build_mode_buttons(row2)
         root.addLayout(row2)
 
         add_hline(root)
 
-        # RX-Fenster
+        # RX window
         self.rx_display = QTextEdit()
         self.rx_display.setReadOnly(True)
         self.rx_display.setFont(QFont("Courier New", 10))
-        self.rx_display.setPlaceholderText("RX – empfangene Zeichen erscheinen hier …")
+        self.rx_display.setPlaceholderText("RX — received characters appear here …")
         self.rx_display.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -774,12 +581,12 @@ class RttyBaseScreen(QWidget):
 
         add_hline(root)
 
-        # TX-Fenster (5 Zeilen)
-        self.tx_input = QTextEdit()
+        # TX window (5 lines) — TxInputWidget for char-level ACK tracking
+        self.tx_input = TxInputWidget()
         self.tx_input.setFont(QFont("Courier New", 10))
-        self.tx_input.setPlaceholderText("TX – Eingabe hier …")
-        fm   = self.tx_input.fontMetrics()
-        mc   = self.tx_input.contentsMargins()
+        self.tx_input.setPlaceholderText("TX — type here …")
+        fm = self.tx_input.fontMetrics()
+        mc = self.tx_input.contentsMargins()
         self.tx_input.setFixedHeight(
             fm.lineSpacing() * 5 + mc.top() + mc.bottom() + 8
         )
@@ -788,7 +595,7 @@ class RttyBaseScreen(QWidget):
 
         add_hline(root)
 
-        # Macro-Sektion
+        # Macro bar
         macro_row = QHBoxLayout()
         macro_row.setSpacing(SPACING)
 
@@ -796,15 +603,35 @@ class RttyBaseScreen(QWidget):
         for i in range(MACRO_COUNT):
             btn = QPushButton(self._macro_store.names[i])
             btn.setFixedWidth(BTN_W)
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # kein Focus-Raub
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             macro_row.addWidget(btn)
             self.macro_buttons.append(btn)
 
         macro_row.addStretch()
 
+        self.btn_clear_tx = QPushButton("Clear TX")
+        self.btn_clear_tx.setFixedWidth(BTN_W)
+        self.btn_clear_tx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_tx.setStyleSheet(
+            "QPushButton { border: 1px solid #666; border-radius: 4px;"
+            " padding: 4px; color: #ffaa44; }"
+        )
+        self.btn_clear_tx.clicked.connect(self.clear_tx_req.emit)
+        macro_row.addWidget(self.btn_clear_tx)
+
+        self.btn_clear_rx = QPushButton("Clear RX")
+        self.btn_clear_rx.setFixedWidth(BTN_W)
+        self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_rx.setStyleSheet(
+            "QPushButton { border: 1px solid #666; border-radius: 4px;"
+            " padding: 4px; color: #88ccff; }"
+        )
+        self.btn_clear_rx.clicked.connect(self.clear_rx_req.emit)
+        macro_row.addWidget(self.btn_clear_rx)
+
         self.btn_edit_macros = QPushButton("Edit Macros")
         self.btn_edit_macros.setFixedWidth(BTN_W + 20)
-        self.btn_edit_macros.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # kein Focus-Raub
+        self.btn_edit_macros.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_edit_macros.setStyleSheet(
             "QPushButton { border: 1px solid #666; border-radius: 4px; padding: 4px; }"
         )
@@ -813,17 +640,12 @@ class RttyBaseScreen(QWidget):
         root.addLayout(macro_row)
 
     # ------------------------------------------------------------------
-    # Abstrakte Methode — MUSS von Unterklasse überschrieben werden
+    # Abstract method — subclass MUST override
     # ------------------------------------------------------------------
 
     def _build_mode_buttons(self, layout: QHBoxLayout) -> None:
-        """Baut die moduspezifischen Buttons in Reihe 2.
-
-        Unterklasse fügt ihre Buttons in 'layout' ein und ruft am Ende
-        layout.addStretch() auf.
-        """
         raise NotImplementedError(
-            f"{self.__class__.__name__} muss _build_mode_buttons() implementieren."
+            f"{self.__class__.__name__} must implement _build_mode_buttons()."
         )
 
     # ------------------------------------------------------------------
@@ -831,9 +653,8 @@ class RttyBaseScreen(QWidget):
     # ------------------------------------------------------------------
 
     def _on_send_toggled(self, checked: bool) -> None:
-        if not checked:
-            return   # already active — ignore re-click
         if checked:
+            # SEND activated — deactivate RECEIVE visually
             self.btn_receive.blockSignals(True)
             self.btn_receive.setChecked(False)
             self.btn_receive.blockSignals(False)
@@ -842,21 +663,23 @@ class RttyBaseScreen(QWidget):
             self.btn_send.setStyleSheet(STYLE_SEND_ON)
             self._blink_timer.start()
         else:
+            # SEND deactivated (second click on SEND) → switch to RECEIVE
             self._blink_timer.stop()
             self.btn_send.setStyleSheet(STYLE_PROM_INACTIVE)
+            self.btn_receive.blockSignals(True)
+            self.btn_receive.setChecked(True)
+            self.btn_receive.blockSignals(False)
+            self.btn_receive.setStyleSheet(STYLE_RECEIVE_ON)
 
     def _on_receive_toggled(self, checked: bool) -> None:
         if not checked:
-            return   # already active — ignore re-click
-        if checked:
-            self._blink_timer.stop()
-            self.btn_send.blockSignals(True)
-            self.btn_send.setChecked(False)
-            self.btn_send.blockSignals(False)
-            self.btn_send.setStyleSheet(STYLE_PROM_INACTIVE)
-            self.btn_receive.setStyleSheet(STYLE_RECEIVE_ON)
-        else:
-            self.btn_receive.setStyleSheet(STYLE_PROM_INACTIVE)
+            return
+        self._blink_timer.stop()
+        self.btn_send.blockSignals(True)
+        self.btn_send.setChecked(False)
+        self.btn_send.blockSignals(False)
+        self.btn_send.setStyleSheet(STYLE_PROM_INACTIVE)
+        self.btn_receive.setStyleSheet(STYLE_RECEIVE_ON)
 
     def _on_blink_tick(self) -> None:
         self._blink_phase = not self._blink_phase
@@ -865,7 +688,6 @@ class RttyBaseScreen(QWidget):
         )
 
     def _update_utc(self) -> None:
-        """Aktualisiert das UTC-Zeit-Label auf die aktuelle Sekunde."""
         now = datetime.now(timezone.utc)
         self.lbl_utc.setText(now.strftime("UTC  %H:%M:%S"))
 

@@ -1,0 +1,286 @@
+"""
+baudot_tx_controller.py — Baudot TX State Machine
+==================================================
+
+Pure state machine for Baudot TX/RX logic.
+No serial I/O, no Qt widgets — only signals and state.
+
+Proven in baudot_tx_test.py (2026-05-02).
+Integrated into PK232PY main project (2026-05-03).
+
+Three-index system (see TX_STATE_MACHINE.md §13):
+    _tx_sent_idx  — how far chars have been queued to TNC
+    _ack_idx      — how far TNC has confirmed with DATA_ACK
+    _cycle_start  — document anchor for colour_at() in TxInputWidget
+
+Rate-limited TX (see TX_STATE_MACHINE.md §10):
+    QTimer sends one character per mspeed_ms interval.
+    DATA_ACKs arrive in sync with actual Baudot RF transmission.
+
+EOT marker (see TX_STATE_MACHINE.md §11):
+    char == '\\x04' → [^D] visible in TX, triggers RECEIVE when reached.
+
+Usage in MainWindow / BaudotScreen:
+    ctrl = BaudotTxController(parent=self)
+    ctrl.set_mspeed(50)                    # from TNC config MSPEED
+    ctrl.colour_char.connect(...)          # colour TX char green
+    ctrl.show_in_rx.connect(...)           # show ACK'd char in RX
+    ctrl.send_to_tnc.connect(...)          # send char to TNC
+    ctrl.eot_reached.connect(do_receive)   # CTRL+D reached
+
+    # On XM ACK from TNC:
+    ctrl.on_send_start()
+
+    # On DATA_ACK ($5F XX XX $00) from TNC:
+    ctrl.on_data_ack()
+
+    # On RECEIVE pressed:
+    ctrl.on_send_stop()
+
+    # On keystroke in TX window:
+    ctrl.on_char_typed(char, display)
+"""
+
+from __future__ import annotations
+
+import logging
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+
+logger = logging.getLogger(__name__)
+
+
+class BaudotTxController(QObject):
+    """Pure TX/RX state machine for Baudot mode.
+
+    No serial I/O, no widget references.
+    Communicates entirely via Qt signals.
+
+    Signals
+    -------
+    colour_char(arr_idx: int, sent: bool)
+        Colour one char in TX window. sent=True → inverse green (ACK'd).
+    show_in_rx(display: str)
+        Append one confirmed char to RX window (amber colour).
+    send_to_tnc(char: str)
+        Send one character to TNC via serial layer.
+    warning(msg: str)
+        Show warning message in RX window.
+    status_msg(msg: str)
+        Update status bar.
+    eot_reached()
+        CTRL+D EOT marker reached — switch to RECEIVE.
+    """
+
+    colour_char = pyqtSignal(int, bool)   # (arr_idx, sent)
+    show_in_rx  = pyqtSignal(str)
+    send_to_tnc = pyqtSignal(str)
+    warning     = pyqtSignal(str)
+    status_msg  = pyqtSignal(str)
+    eot_reached = pyqtSignal()
+
+    TX_MAX = 512
+
+    # ms per character at each Baudot speed (7.5 bits/char ITA-2)
+    # Formula: ms/char = 7500 / baud
+    BAUD_RATES = {
+        45: 167, 50: 150, 75: 100, 100: 75,
+        110: 68, 150: 50, 200: 38, 300: 25,
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._arr: list[dict] = []   # {char, display, sent}
+        self._tx_sent_idx = 0        # next char to queue for TNC
+        self._ack_idx     = 0        # next char awaiting DATA_ACK
+        self._cycle_start = 0        # SEND cycle anchor for colour_at
+        self._send_active = False
+        self._mspeed_ms   = 150      # default 50 Baud
+
+        self._tx_queue: list[str] = []
+        self._tx_timer = QTimer(self)
+        self._tx_timer.setSingleShot(True)
+        self._tx_timer.timeout.connect(self._send_next_char)
+
+    # ── Public API ────────────────────────────────────────────────────
+
+    def set_mspeed(self, baud: int) -> None:
+        """Set TX rate. Called from MSPEED config parameter."""
+        self._mspeed_ms = self.BAUD_RATES.get(baud, 150)
+        logger.debug("MSPEED %d Baud → %dms/char", baud, self._mspeed_ms)
+
+    def on_char_typed(self, char: str, display: str) -> None:
+        """Called on every keystroke — regardless of SEND/RECEIVE state.
+
+        Special sentinel:
+            '\\x08' (BS) — user deleted one unsent char (or one EOT marker).
+            Remove the last unsent entry from _arr so doc positions stay
+            in sync. Also clamp _ack_idx so it never exceeds len(_arr).
+
+        Always appends to _arr for normal chars.
+        Only queues for sending if SEND is currently active.
+        """
+        if char == '\x08':
+            # Only remove chars beyond _tx_sent_idx (not yet sent to TNC)
+            if len(self._arr) > self._tx_sent_idx:
+                self._arr.pop()
+            # Clamp _ack_idx — late ACKs must not address deleted positions
+            if self._ack_idx > len(self._arr):
+                self._ack_idx = len(self._arr)
+            return
+
+        # Only count chars not yet sent to TNC — sent chars are history.
+        if (len(self._arr) - self._tx_sent_idx) >= self.TX_MAX:
+            self.warning.emit("BUFFER_FULL")
+            return
+        self._arr.append({'char': char, 'display': display, 'sent': False})
+        if self._send_active:
+            self._queue_char(char)
+
+    def on_send_start(self) -> None:
+        """Called after XM ACK from TNC.
+
+        Flushes all chars not yet sent (_tx_sent_idx onward) into the
+        rate-limited queue. Chars already in TNC buffer are NOT re-sent.
+
+        Also resets _ack_idx to _cycle_start so that ACKs from the
+        previous cycle (e.g. for the EOT marker) don't interfere with
+        the new cycle's ACK tracking.
+        """
+        self._send_active = True
+        # Align _ack_idx with the new cycle start.
+        # Without this, late ACKs for the previous cycle's EOT marker
+        # arrive with idx=_ack_idx < _cycle_start and are all ignored,
+        # meaning none of the new cycle's chars get colour_at() called.
+        self._ack_idx = self._cycle_start
+        unsent = self._arr[self._tx_sent_idx:]
+        for e in unsent:
+            self._queue_char(e['char'])
+        n = len([e for e in unsent if e['char'] != '\x04'])
+        logger.debug("on_send_start: queuing %d chars at %dms/char",
+                     n, self._mspeed_ms)
+        if n:
+            self.status_msg.emit(
+                f"SEND active — {n} char(s) at {7500 // self._mspeed_ms} Baud")
+        else:
+            self.status_msg.emit("SEND active — PTT on, ready to type")
+
+    def on_send_stop(self) -> None:
+        """Called when RECEIVE is pressed.
+
+        Stops rate-limited timer. Chars still in queue are rolled back.
+        cycle_start and _ack_idx are both advanced to _tx_sent_idx so
+        the next SEND cycle starts cleanly from where we left off.
+        """
+        self._send_active = False
+        self._tx_timer.stop()
+        self._tx_sent_idx -= len(self._tx_queue)
+        self._tx_queue.clear()
+        self._cycle_start = self._tx_sent_idx
+        # Clamp _ack_idx to _tx_sent_idx — any outstanding ACKs from the
+        # previous cycle (e.g. for the EOT marker) are now irrelevant.
+        # on_send_start will set _ack_idx = _cycle_start anyway, so this
+        # just keeps the state consistent during RECEIVE.
+        self._ack_idx = self._tx_sent_idx
+
+    def on_data_ack(self) -> None:
+        """Called on DATA_ACK frame ($5F XX XX $00) from TNC.
+
+        Advances _ack_idx, colours the char green in TX,
+        appends it amber to RX. Fires in order: 0, 1, 2, ...
+
+        Late ACKs that arrive after the user has deleted the
+        corresponding _arr entry (via Backspace) are silently ignored.
+        """
+        idx = self._ack_idx
+        if idx >= len(self._arr):
+            logger.debug("Spurious/late ACK idx=%d arr=%d — ignored",
+                         idx, len(self._arr))
+            self._ack_idx = len(self._arr)   # clamp
+            return
+        if idx < self._cycle_start:
+            logger.debug("Late ACK ignored idx=%d cycle=%d",
+                         idx, self._cycle_start)
+            # Do NOT increment _ack_idx — this ACK belongs to a previous
+            # cycle (e.g. the EOT marker \x04) and was already counted.
+            # Incrementing here causes _ack_idx to skip one position in
+            # the new cycle, resulting in the last char never being ACKd.
+            return
+            return
+        e = self._arr[idx]
+        e['sent'] = True
+        self._ack_idx += 1
+        logger.debug("DATA_ACK #%d char=%r", idx, e['char'])
+        self.colour_char.emit(idx, True)
+        display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
+        self.show_in_rx.emit(display)
+        rem = len(self._arr) - self._ack_idx
+        self.status_msg.emit(
+            f"ACK #{idx + 1} — {rem} remaining" if rem
+            else f"All {len(self._arr)} chars confirmed ✓"
+        )
+
+    def still_to_transmit(self) -> bool:
+        """True if real chars (not just EOT markers) remain unsent."""
+        remaining = self._arr[self._tx_sent_idx:]
+        return any(e['char'] != '\x04' for e in remaining)
+
+    def clear(self) -> None:
+        """Reset all state — call when Host Mode becomes active."""
+        self._arr.clear()
+        self._tx_sent_idx = 0
+        self._ack_idx     = 0
+        self._cycle_start = 0
+        self._send_active = False
+        self._tx_timer.stop()
+        self._tx_queue.clear()
+
+    # ── Properties ───────────────────────────────────────────────────
+
+    @property
+    def array_len(self) -> int:    return len(self._arr)
+
+    @property
+    def pending_len(self) -> int:
+        """Chars typed but not yet sent — the relevant count for TX_MAX."""
+        return max(0, len(self._arr) - self._tx_sent_idx)
+
+    @property
+    def tx_sent_idx(self) -> int:  return self._tx_sent_idx
+
+    @property
+    def ack_idx(self) -> int:      return self._ack_idx
+
+    @property
+    def cycle_start(self) -> int:  return self._cycle_start
+
+    @property
+    def send_active(self) -> bool: return self._send_active
+
+    # ── Internal ─────────────────────────────────────────────────────
+
+    def _queue_char(self, char: str) -> None:
+        """Add one char to rate-limited TX queue, advance _tx_sent_idx."""
+        self._tx_queue.append(char)
+        self._tx_sent_idx += 1
+        if not self._tx_timer.isActive() and len(self._tx_queue) == 1:
+            self._tx_timer.start(self._mspeed_ms)
+
+    def _send_next_char(self) -> None:
+        """Timer callback — send next char from queue.
+
+        EOT marker (\\x04): not sent to TNC, triggers eot_reached signal.
+        _tx_queue is cleared before emit so on_send_stop sees empty queue
+        and does not subtract from _tx_sent_idx.
+        """
+        if not self._tx_queue or not self._send_active:
+            return
+        char = self._tx_queue.pop(0)
+        if char == '\x04':
+            self._tx_queue.clear()
+            self._tx_timer.stop()
+            self.status_msg.emit("EOT marker reached — switching to RECEIVE")
+            self.eot_reached.emit()
+            return
+        self.send_to_tnc.emit(char)
+        if self._tx_queue:
+            self._tx_timer.start(self._mspeed_ms)
