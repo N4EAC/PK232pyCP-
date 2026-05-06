@@ -5,7 +5,7 @@
 #
 CQ|CQ de OE3GAS\npse k[^D]
 73|73 de OE3GAS[^D]
-RIG|My Rig: IC-7300, IC-7610, 7ele 3band yagi, PK232[^D]
+RIG|[^S]My Rig: IC-7300, IC-7610, 7ele 3band yagi, PK232[^D]
 Macro 4|
 Macro 5|
 Macro 6|

@@ -1149,10 +1149,10 @@ class MainWindow(QMainWindow):
                 pass
             self._baudot_ctrl.eot_reached.connect(self._on_baudot_eot)
             try:
-                self._baudot_ctrl.sos_reached.disconnect()
+                self._baudot_ctrl.timed_send_reached.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.sos_reached.connect(self._on_baudot_sos)
+            self._baudot_ctrl.timed_send_reached.connect(self._on_baudot_timed_send)
             try:
                 self._baudot_ctrl.status_msg.disconnect()
             except (RuntimeError, TypeError):
@@ -1344,20 +1344,36 @@ class MainWindow(QMainWindow):
                 tx._doc_extra = getattr(tx, '_doc_extra', 0) + 3
                 tx.char_typed.emit('\x04', '[^D]')
                 i += 4
-            elif text[i:i+4] == '[^S]':
-                # SOS marker — emit sentinel, insert visual marker in TX
-                from PyQt6.QtGui import QTextCharFormat as _TCF, QColor as _QC
-                f_sos = _TCF()
-                f_sos.setForeground(_QC("#ffffff"))
-                f_sos.setBackground(_QC("#0044cc"))
-                f_sos.setFontWeight(700)
-                tx.setCurrentCharFormat(f_sos)
-                tx.textCursor().insertText('[^S]')
-                tx.setCurrentCharFormat(f)
-                # [^S] = 4 doc chars, 1 _arr entry → track discrepancy
-                tx._doc_extra = getattr(tx, '_doc_extra', 0) + 3
-                tx.char_typed.emit('\x13', '[^S]')
-                i += 4
+            elif text[i:i+4] == '[^T:':
+                # Timed marker [^T:n] — read digits up to ']'
+                j = i + 4
+                while j < len(text) and text[j].isdigit():
+                    j += 1
+                if j < len(text) and text[j] == ']':
+                    marker = text[i:j+1]          # e.g. '[^T:5]'
+                    marker_len = len(marker)
+                    try:
+                        n_val = int(text[i+4:j])
+                        n_val = max(1, min(10, n_val))
+                    except ValueError:
+                        n_val = 1
+                    from PyQt6.QtGui import QTextCharFormat as _TCF, QColor as _QC
+                    f_tmr = _TCF()
+                    f_tmr.setForeground(_QC("#ffffff"))
+                    f_tmr.setBackground(_QC("#8800cc"))
+                    f_tmr.setFontWeight(700)
+                    tx.setCurrentCharFormat(f_tmr)
+                    tx.textCursor().insertText(marker)
+                    tx.setCurrentCharFormat(f)
+                    tx._doc_extra = getattr(tx, '_doc_extra', 0) + (marker_len - 1)
+                    tx.char_typed.emit(f'\x1b{n_val}', marker)
+                    i = j + 1
+                else:
+                    # Malformed — insert as plain text
+                    tx.setCurrentCharFormat(f)
+                    tx.textCursor().insertText(text[i])
+                    tx.char_typed.emit(text[i], text[i])
+                    i += 1
             elif text[i] == '\n':
                 tx.setCurrentCharFormat(f)
                 c = tx.textCursor()
@@ -1474,17 +1490,28 @@ class MainWindow(QMainWindow):
         if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
             screen.btn_receive.setChecked(True)
 
-    def _on_baudot_sos(self) -> None:
-        """[^S] SOS marker reached — switch to SEND.
+    def _on_baudot_timed_send(self, n: int) -> None:
+        """[^T:n] timed marker reached — RECEIVE, wait n seconds, then SEND.
 
-        Only activates if we are currently in RECEIVE mode (btn_send not
-        already checked). Setting btn_send.setChecked(True) fires the
-        toggled signal, which calls _on_screen_send(True) — same path
-        as pressing the SEND button manually.
+        Step 1: force RECEIVE mode (PTT off).
+        Step 2: after n seconds, activate SEND (PTT on) via QTimer.
+        The timer is fire-and-forget; if the user presses SEND manually
+        before the timer fires, setChecked(True) on an already-checked
+        button is a harmless no-op.
         """
         screen = self._opmode_stack.currentWidget()
-        if hasattr(screen, 'btn_send') and not screen.btn_send.isChecked():
-            screen.btn_send.setChecked(True)
+        # Step 1 — switch to RECEIVE
+        if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
+            screen.btn_receive.setChecked(True)
+        # Show countdown in status bar
+        self.statusBar().showMessage(
+            f"[^T:{n}] — RECEIVE for {n}s, then auto-SEND …", n * 1000)
+        # Step 2 — schedule SEND after n seconds
+        def _auto_send():
+            s = self._opmode_stack.currentWidget()
+            if hasattr(s, 'btn_send') and not s.btn_send.isChecked():
+                s.btn_send.setChecked(True)
+        QTimer.singleShot(n * 1000, _auto_send)
 
     def _on_baudot_warning(self, msg: str) -> None:
         """Handle warnings from BaudotTxController.

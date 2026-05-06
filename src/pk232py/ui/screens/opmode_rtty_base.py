@@ -133,7 +133,7 @@ class TxInputWidget(QTextEdit):
     - set_cycle_anchor() — updates doc position anchor for colour_at()
     - Edit protection   — already-sent chars (inverse green) cannot be modified
     - CTRL+D            — inserts [^D] EOT marker (char = \x04)
-    - CTRL+S            — inserts [^S] SOS marker (char = \x13)
+    - CTRL+T            — opens n dialog, inserts [^T:n] timed marker (char = \x1b + str(n))
     - insertFromMimeData — paste fires char_typed per character
 
     Colour conventions (theme-aware):
@@ -338,31 +338,43 @@ class TxInputWidget(QTextEdit):
             c.setCharFormat(f_normal)
             self.setTextCursor(c)
             if not hasattr(self, "_eot_positions"):
-                self._eot_positions: list[int] = []
-            self._eot_positions.append(eot_doc_pos)
+                self._eot_positions: list[dict] = []
+            self._eot_positions.append({'pos': eot_doc_pos, 'len': 4})
             # [^D] = 4 doc chars but 1 _arr entry → 3 extra doc positions
             self._doc_extra += 3
             self.char_typed.emit("\x04", "[^D]")
             return
 
-        # CTRL+S: insert [^S] SOS marker (switch to SEND when reached)
-        if mods == Ctrl and key == Qt.Key.Key_S:
-            f_sos = QTextCharFormat()
-            f_sos.setForeground(QColor("#ffffff"))
-            f_sos.setBackground(QColor("#0044cc"))
-            f_sos.setFontWeight(700)
+        # CTRL+T: open n-dialog, insert [^T:n] timed marker
+        # (RECEIVE, wait n seconds, SEND)
+        if mods == Ctrl and key == Qt.Key.Key_T:
+            from PyQt6.QtWidgets import QInputDialog
+            n, ok = QInputDialog.getInt(
+                self, "Timed Marker",
+                "Wait time in seconds (1–10):",
+                value=5, min=1, max=10
+            )
+            if not ok:
+                return
+            marker = f"[^T:{n}]"          # e.g. "[^T:5]" = 6 chars
+            marker_len = len(marker)       # 6 for n=1..9, 7 for n=10
+            f_tmr = QTextCharFormat()
+            f_tmr.setForeground(QColor("#ffffff"))
+            f_tmr.setBackground(QColor("#8800cc"))
+            f_tmr.setFontWeight(700)
             c = self.textCursor()
-            sos_doc_pos = c.position()
-            c.setCharFormat(f_sos)
-            c.insertText("[^S]")
+            tmr_doc_pos = c.position()
+            c.setCharFormat(f_tmr)
+            c.insertText(marker)
             c.setCharFormat(f_normal)
             self.setTextCursor(c)
             if not hasattr(self, "_eot_positions"):
-                self._eot_positions: list[int] = []
-            self._eot_positions.append(sos_doc_pos)
-            # [^S] = 4 doc chars but 1 _arr entry → 3 extra doc positions
-            self._doc_extra += 3
-            self.char_typed.emit("\x13", "[^S]")
+                self._eot_positions: list[dict] = []
+            self._eot_positions.append({'pos': tmr_doc_pos, 'len': marker_len})
+            # marker_len doc chars but 1 _arr entry → (marker_len-1) extra
+            self._doc_extra += marker_len - 1
+            # Sentinel: ESC + decimal n  (e.g. "\x1b5" or "\x1b10")
+            self.char_typed.emit(f"\x1b{n}", marker)
             return
 
         # ── Any key touching protected zone ───────────────────────────
@@ -386,37 +398,57 @@ class TxInputWidget(QTextEdit):
             c = self.textCursor()
             pos = c.position()
             eot_positions = getattr(self, "_eot_positions", [])
-            # Check if cursor is right after a [^D] marker (4 chars).
-            # EOT marker at doc_pos p occupies chars p..p+3, cursor at p+4.
+            # Check if cursor is right after any marker.
+            # Each entry: {'pos': int, 'len': int}
+            # Marker at doc_pos p with length L occupies p..p+L-1,
+            # cursor sits at p+L after the marker.
             eot_hit = None
-            for eot_pos in eot_positions:
-                if pos == eot_pos + 4:
-                    eot_hit = eot_pos
+            for entry in eot_positions:
+                # Support both old int entries and new dict entries
+                if isinstance(entry, dict):
+                    p, mlen = entry['pos'], entry['len']
+                else:
+                    p, mlen = entry, 4   # legacy: [^D] was always 4
+                if pos == p + mlen:
+                    eot_hit = (p, mlen, entry)
                     break
             if eot_hit is not None:
-                # Delete all 4 chars of [^D] atomically
-                c.setPosition(eot_hit)
-                c.setPosition(eot_hit + 4, QTextCursor.MoveMode.KeepAnchor)
+                p, mlen, entry_ref = eot_hit
+                # Delete all marker chars atomically
+                c.setPosition(p)
+                c.setPosition(p + mlen, QTextCursor.MoveMode.KeepAnchor)
                 c.removeSelectedText()
-                self._eot_positions.remove(eot_hit)
-                # Adjust tracked positions of EOT markers that come after
-                self._eot_positions = [
-                    p - 4 if p > eot_hit else p
-                    for p in self._eot_positions
-                ]
-                # Restore the 3 extra doc positions
-                self._doc_extra = max(0, self._doc_extra - 3)
-                # Notify controller: BS sentinel for the whole EOT (1 _arr entry)
+                self._eot_positions.remove(entry_ref)
+                # Shift positions of markers that come after this one
+                new_list = []
+                for e in self._eot_positions:
+                    if isinstance(e, dict):
+                        if e['pos'] > p:
+                            new_list.append({'pos': e['pos'] - mlen, 'len': e['len']})
+                        else:
+                            new_list.append(e)
+                    else:
+                        new_list.append(e - mlen if e > p else e)
+                self._eot_positions = new_list
+                # Restore the extra doc positions for this marker
+                self._doc_extra = max(0, self._doc_extra - (mlen - 1))
+                # Notify controller: BS sentinel — 1 _arr entry removed
                 self.char_typed.emit('\x08', '')
             else:
                 # Normal backspace — notify controller then delete
                 self.char_typed.emit('\x08', '')
                 super().keyPressEvent(ev)
-                # Adjust EOT positions after cursor
-                self._eot_positions = [
-                    p - 1 if p >= pos else p
-                    for p in getattr(self, "_eot_positions", [])
-                ]
+                # Shift marker positions after the deleted char
+                new_list = []
+                for e in getattr(self, "_eot_positions", []):
+                    if isinstance(e, dict):
+                        if e['pos'] >= pos:
+                            new_list.append({'pos': e['pos'] - 1, 'len': e['len']})
+                        else:
+                            new_list.append(e)
+                    else:
+                        new_list.append(e - 1 if e >= pos else e)
+                self._eot_positions = new_list
             return
 
         # ── Enter / printable characters ──────────────────────────────

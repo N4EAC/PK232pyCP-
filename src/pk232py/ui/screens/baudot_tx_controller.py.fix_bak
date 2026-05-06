@@ -288,14 +288,12 @@ class BaudotTxController(QObject):
             self.eot_reached.emit()
             return
         if char.startswith('\x1b'):
-            # [^T:n] timed marker — do NOT send to TNC.
-            # Do NOT clear _tx_queue here — on_send_stop() will roll back
-            # _tx_sent_idx by len(_tx_queue), so the chars after [^T:n]
-            # are correctly re-queued when on_send_start() fires after n sec.
+            # [^T:n] timed marker — do NOT send to TNC
             try:
                 n = int(char[1:])
             except ValueError:
                 n = 1
+            self._tx_queue.clear()
             self._tx_timer.stop()
             self.status_msg.emit(
                 f"[^T:{n}] — switching to RECEIVE, resuming SEND in {n}s")

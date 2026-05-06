@@ -1,8 +1,8 @@
 # =============================================================================
 # PK232PY - Python source export for Claude project knowledge
-# Generated : 2026-05-05 20:38:38 UTC+0
+# Generated : 2026-05-06 18:45:08 UTC+0
 # Repo root : E:\PK232\pk232py_repo
-# Branch    : main  (3912b37)
+# Branch    : main  (8c8590e)
 # =============================================================================
 #
 # Structure:
@@ -9922,6 +9922,11 @@ class MainWindow(QMainWindow):
                 pass
             self._baudot_ctrl.eot_reached.connect(self._on_baudot_eot)
             try:
+                self._baudot_ctrl.timed_send_reached.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.timed_send_reached.connect(self._on_baudot_timed_send)
+            try:
                 self._baudot_ctrl.status_msg.disconnect()
             except (RuntimeError, TypeError):
                 pass
@@ -10112,6 +10117,36 @@ class MainWindow(QMainWindow):
                 tx._doc_extra = getattr(tx, '_doc_extra', 0) + 3
                 tx.char_typed.emit('\x04', '[^D]')
                 i += 4
+            elif text[i:i+4] == '[^T:':
+                # Timed marker [^T:n] — read digits up to ']'
+                j = i + 4
+                while j < len(text) and text[j].isdigit():
+                    j += 1
+                if j < len(text) and text[j] == ']':
+                    marker = text[i:j+1]          # e.g. '[^T:5]'
+                    marker_len = len(marker)
+                    try:
+                        n_val = int(text[i+4:j])
+                        n_val = max(1, min(10, n_val))
+                    except ValueError:
+                        n_val = 1
+                    from PyQt6.QtGui import QTextCharFormat as _TCF, QColor as _QC
+                    f_tmr = _TCF()
+                    f_tmr.setForeground(_QC("#ffffff"))
+                    f_tmr.setBackground(_QC("#8800cc"))
+                    f_tmr.setFontWeight(700)
+                    tx.setCurrentCharFormat(f_tmr)
+                    tx.textCursor().insertText(marker)
+                    tx.setCurrentCharFormat(f)
+                    tx._doc_extra = getattr(tx, '_doc_extra', 0) + (marker_len - 1)
+                    tx.char_typed.emit(f'\x1b{n_val}', marker)
+                    i = j + 1
+                else:
+                    # Malformed — insert as plain text
+                    tx.setCurrentCharFormat(f)
+                    tx.textCursor().insertText(text[i])
+                    tx.char_typed.emit(text[i], text[i])
+                    i += 1
             elif text[i] == '\n':
                 tx.setCurrentCharFormat(f)
                 c = tx.textCursor()
@@ -10227,6 +10262,29 @@ class MainWindow(QMainWindow):
         screen = self._opmode_stack.currentWidget()
         if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
             screen.btn_receive.setChecked(True)
+
+    def _on_baudot_timed_send(self, n: int) -> None:
+        """[^T:n] timed marker reached — RECEIVE, wait n seconds, then SEND.
+
+        Step 1: force RECEIVE mode (PTT off).
+        Step 2: after n seconds, activate SEND (PTT on) via QTimer.
+        The timer is fire-and-forget; if the user presses SEND manually
+        before the timer fires, setChecked(True) on an already-checked
+        button is a harmless no-op.
+        """
+        screen = self._opmode_stack.currentWidget()
+        # Step 1 — switch to RECEIVE
+        if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
+            screen.btn_receive.setChecked(True)
+        # Show countdown in status bar
+        self.statusBar().showMessage(
+            f"[^T:{n}] — RECEIVE for {n}s, then auto-SEND …", n * 1000)
+        # Step 2 — schedule SEND after n seconds
+        def _auto_send():
+            s = self._opmode_stack.currentWidget()
+            if hasattr(s, 'btn_send') and not s.btn_send.isChecked():
+                s.btn_send.setChecked(True)
+        QTimer.singleShot(n * 1000, _auto_send)
 
     def _on_baudot_warning(self, msg: str) -> None:
         """Handle warnings from BaudotTxController.
@@ -14415,6 +14473,8 @@ class BaudotTxController(QObject):
         Update status bar.
     eot_reached()
         CTRL+D EOT marker reached — switch to RECEIVE.
+    timed_send_reached(n: int)
+        CTRL+T timed marker reached — switch to RECEIVE, wait n sec, then SEND.
     """
 
     colour_char = pyqtSignal(int, bool)   # (arr_idx, sent)
@@ -14423,6 +14483,7 @@ class BaudotTxController(QObject):
     warning     = pyqtSignal(str)
     status_msg  = pyqtSignal(str)
     eot_reached = pyqtSignal()
+    timed_send_reached = pyqtSignal(int)  # [^T:n] — wait n sec then SEND
 
     TX_MAX = 512
 
@@ -14568,7 +14629,10 @@ class BaudotTxController(QObject):
     def still_to_transmit(self) -> bool:
         """True if real chars (not just EOT markers) remain unsent."""
         remaining = self._arr[self._tx_sent_idx:]
-        return any(e['char'] != '\x04' for e in remaining)
+        return any(
+            e['char'] != '\x04' and not e['char'].startswith('\x1b')
+            for e in remaining
+        )
 
     def clear(self) -> None:
         """Reset all state — call when Host Mode becomes active."""
@@ -14626,6 +14690,18 @@ class BaudotTxController(QObject):
             self._tx_timer.stop()
             self.status_msg.emit("EOT marker reached — switching to RECEIVE")
             self.eot_reached.emit()
+            return
+        if char.startswith('\x1b'):
+            # [^T:n] timed marker — do NOT send to TNC
+            try:
+                n = int(char[1:])
+            except ValueError:
+                n = 1
+            self._tx_queue.clear()
+            self._tx_timer.stop()
+            self.status_msg.emit(
+                f"[^T:{n}] — switching to RECEIVE, resuming SEND in {n}s")
+            self.timed_send_reached.emit(n)
             return
         self.send_to_tnc.emit(char)
         if self._tx_queue:
@@ -15556,25 +15632,27 @@ from PyQt6.QtCore import Qt
 
 
 class MacroTextEdit(QTextEdit):
-    """QTextEdit for macro text with CTRL+D support.
+    """QTextEdit for macro text with CTRL+D and CTRL+T support.
 
-    CTRL+D inserts "[^D]" (4 visible ASCII chars) with orange inverse
-    styling. Backspace detects cursor right after "[^D]" and deletes
-    all 4 chars atomically — same approach as TxInputWidget._eot_positions.
+    CTRL+D inserts "[^D]" (4 chars) with orange inverse styling.
+    CTRL+T opens a dialog for n (1–10), inserts "[^T:n]" (6–7 chars)
+    with purple inverse styling.
+    Backspace detects cursor right after any marker and deletes it
+    atomically — _eot_positions stores {pos, len} dicts.
 
     No private-use Unicode — works on all Windows fonts.
-    Stored as "[^D]" in Macro.txt (human-readable).
+    Stored as "[^D]" / "[^T:n]" in Macro.txt (human-readable).
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._eot_positions: list[int] = []
+        self._eot_positions: list[dict] = []  # {'pos': int, 'len': int}
 
     def keyPressEvent(self, ev: QKeyEvent) -> None:
         key  = ev.key()
         mods = ev.modifiers()
 
-        # CTRL+D — insert [^D] orange marker
+        # CTRL+D — insert [^D] orange marker (switch to RECEIVE)
         if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_D:
             f_eot = QTextCharFormat()
             f_eot.setForeground(QColor("#ffffff"))
@@ -15587,30 +15665,59 @@ class MacroTextEdit(QTextEdit):
             c.insertText("[^D]")
             c.setCharFormat(f_normal)
             self.setTextCursor(c)
-            self._eot_positions.append(pos)
+            self._eot_positions.append({'pos': pos, 'len': 4})
             return
 
-        # Backspace — atomic delete of [^D] if cursor is right after it
+        # CTRL+T — open n dialog, insert [^T:n] purple marker (timed RECEIVE)
+        if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_T:
+            from PyQt6.QtWidgets import QInputDialog
+            n, ok = QInputDialog.getInt(
+                self, "Timed Marker",
+                "Wait time in seconds (1–10):",
+                value=5, min=1, max=10
+            )
+            if not ok:
+                return
+            marker = f"[^T:{n}]"
+            marker_len = len(marker)
+            f_tmr = QTextCharFormat()
+            f_tmr.setForeground(QColor("#ffffff"))
+            f_tmr.setBackground(QColor("#8800cc"))
+            f_tmr.setFontWeight(700)
+            f_normal = QTextCharFormat()
+            c = self.textCursor()
+            pos = c.position()
+            c.setCharFormat(f_tmr)
+            c.insertText(marker)
+            c.setCharFormat(f_normal)
+            self.setTextCursor(c)
+            self._eot_positions.append({'pos': pos, 'len': marker_len})
+            return
+
+        # Backspace — atomic delete of any marker if cursor is right after it
         if key == Qt.Key.Key_Backspace:
             c = self.textCursor()
             pos = c.position()
-            for eot_pos in list(self._eot_positions):
-                if pos == eot_pos + 4:
-                    c.setPosition(eot_pos)
-                    c.setPosition(eot_pos + 4,
-                                  QTextCursor.MoveMode.KeepAnchor)
+            for entry in list(self._eot_positions):
+                p   = entry['pos']
+                mlen = entry['len']
+                if pos == p + mlen:
+                    c.setPosition(p)
+                    c.setPosition(p + mlen, QTextCursor.MoveMode.KeepAnchor)
                     c.removeSelectedText()
-                    self._eot_positions.remove(eot_pos)
+                    self._eot_positions.remove(entry)
                     self._eot_positions = [
-                        p - 4 if p > eot_pos else p
-                        for p in self._eot_positions
+                        {'pos': e['pos'] - mlen, 'len': e['len']}
+                        if e['pos'] > p else e
+                        for e in self._eot_positions
                     ]
                     return
             # Normal backspace — shift tracked positions
             if not c.hasSelection():
                 self._eot_positions = [
-                    p - 1 if p >= pos else p
-                    for p in self._eot_positions
+                    {'pos': e['pos'] - 1, 'len': e['len']}
+                    if e['pos'] >= pos else e
+                    for e in self._eot_positions
                 ]
             super().keyPressEvent(ev)
             return
@@ -15850,6 +15957,10 @@ class MacroEditDialog(QDialog):
         f_eot.setForeground(QColor("#ffffff"))
         f_eot.setBackground(QColor("#cc4400"))
         f_eot.setFontWeight(700)
+        f_tmr = QTextCharFormat()
+        f_tmr.setForeground(QColor("#ffffff"))
+        f_tmr.setBackground(QColor("#8800cc"))
+        f_tmr.setFontWeight(700)
         i = 0
         while i < len(text):
             if text[i:i+4] == '[^D]':
@@ -15857,6 +15968,21 @@ class MacroEditDialog(QDialog):
                 cursor.insertText('[^D]')   # 4 orange chars
                 cursor.setCharFormat(f_normal)
                 i += 4
+            elif text[i:i+4] == '[^T:':
+                # Read [^T:n] or [^T:10]
+                j = i + 4
+                while j < len(text) and text[j].isdigit():
+                    j += 1
+                if j < len(text) and text[j] == ']':
+                    marker = text[i:j+1]
+                    cursor.setCharFormat(f_tmr)
+                    cursor.insertText(marker)   # purple chars
+                    cursor.setCharFormat(f_normal)
+                    i = j + 1
+                else:
+                    cursor.setCharFormat(f_normal)
+                    cursor.insertText(text[i])
+                    i += 1
             elif text[i] == '\n':
                 cursor.setCharFormat(f_normal)
                 cursor.insertBlock()
@@ -16882,6 +17008,7 @@ class TxInputWidget(QTextEdit):
     - set_cycle_anchor() — updates doc position anchor for colour_at()
     - Edit protection   — already-sent chars (inverse green) cannot be modified
     - CTRL+D            — inserts [^D] EOT marker (char = \x04)
+    - CTRL+T            — opens n dialog, inserts [^T:n] timed marker (char = \x1b + str(n))
     - insertFromMimeData — paste fires char_typed per character
 
     Colour conventions (theme-aware):
@@ -17073,7 +17200,7 @@ class TxInputWidget(QTextEdit):
             self._push_cursor_to_boundary()
             return
 
-        # CTRL+D: insert [^D] EOT marker
+        # CTRL+D: insert [^D] EOT marker (switch to RECEIVE when reached)
         if mods == Ctrl and key == Qt.Key.Key_D:
             f_eot = QTextCharFormat()
             f_eot.setForeground(QColor("#ffffff"))
@@ -17086,11 +17213,43 @@ class TxInputWidget(QTextEdit):
             c.setCharFormat(f_normal)
             self.setTextCursor(c)
             if not hasattr(self, "_eot_positions"):
-                self._eot_positions: list[int] = []
-            self._eot_positions.append(eot_doc_pos)
+                self._eot_positions: list[dict] = []
+            self._eot_positions.append({'pos': eot_doc_pos, 'len': 4})
             # [^D] = 4 doc chars but 1 _arr entry → 3 extra doc positions
             self._doc_extra += 3
             self.char_typed.emit("\x04", "[^D]")
+            return
+
+        # CTRL+T: open n-dialog, insert [^T:n] timed marker
+        # (RECEIVE, wait n seconds, SEND)
+        if mods == Ctrl and key == Qt.Key.Key_T:
+            from PyQt6.QtWidgets import QInputDialog
+            n, ok = QInputDialog.getInt(
+                self, "Timed Marker",
+                "Wait time in seconds (1–10):",
+                value=5, min=1, max=10
+            )
+            if not ok:
+                return
+            marker = f"[^T:{n}]"          # e.g. "[^T:5]" = 6 chars
+            marker_len = len(marker)       # 6 for n=1..9, 7 for n=10
+            f_tmr = QTextCharFormat()
+            f_tmr.setForeground(QColor("#ffffff"))
+            f_tmr.setBackground(QColor("#8800cc"))
+            f_tmr.setFontWeight(700)
+            c = self.textCursor()
+            tmr_doc_pos = c.position()
+            c.setCharFormat(f_tmr)
+            c.insertText(marker)
+            c.setCharFormat(f_normal)
+            self.setTextCursor(c)
+            if not hasattr(self, "_eot_positions"):
+                self._eot_positions: list[dict] = []
+            self._eot_positions.append({'pos': tmr_doc_pos, 'len': marker_len})
+            # marker_len doc chars but 1 _arr entry → (marker_len-1) extra
+            self._doc_extra += marker_len - 1
+            # Sentinel: ESC + decimal n  (e.g. "\x1b5" or "\x1b10")
+            self.char_typed.emit(f"\x1b{n}", marker)
             return
 
         # ── Any key touching protected zone ───────────────────────────
@@ -17114,37 +17273,57 @@ class TxInputWidget(QTextEdit):
             c = self.textCursor()
             pos = c.position()
             eot_positions = getattr(self, "_eot_positions", [])
-            # Check if cursor is right after a [^D] marker (4 chars).
-            # EOT marker at doc_pos p occupies chars p..p+3, cursor at p+4.
+            # Check if cursor is right after any marker.
+            # Each entry: {'pos': int, 'len': int}
+            # Marker at doc_pos p with length L occupies p..p+L-1,
+            # cursor sits at p+L after the marker.
             eot_hit = None
-            for eot_pos in eot_positions:
-                if pos == eot_pos + 4:
-                    eot_hit = eot_pos
+            for entry in eot_positions:
+                # Support both old int entries and new dict entries
+                if isinstance(entry, dict):
+                    p, mlen = entry['pos'], entry['len']
+                else:
+                    p, mlen = entry, 4   # legacy: [^D] was always 4
+                if pos == p + mlen:
+                    eot_hit = (p, mlen, entry)
                     break
             if eot_hit is not None:
-                # Delete all 4 chars of [^D] atomically
-                c.setPosition(eot_hit)
-                c.setPosition(eot_hit + 4, QTextCursor.MoveMode.KeepAnchor)
+                p, mlen, entry_ref = eot_hit
+                # Delete all marker chars atomically
+                c.setPosition(p)
+                c.setPosition(p + mlen, QTextCursor.MoveMode.KeepAnchor)
                 c.removeSelectedText()
-                self._eot_positions.remove(eot_hit)
-                # Adjust tracked positions of EOT markers that come after
-                self._eot_positions = [
-                    p - 4 if p > eot_hit else p
-                    for p in self._eot_positions
-                ]
-                # Restore the 3 extra doc positions
-                self._doc_extra = max(0, self._doc_extra - 3)
-                # Notify controller: BS sentinel for the whole EOT (1 _arr entry)
+                self._eot_positions.remove(entry_ref)
+                # Shift positions of markers that come after this one
+                new_list = []
+                for e in self._eot_positions:
+                    if isinstance(e, dict):
+                        if e['pos'] > p:
+                            new_list.append({'pos': e['pos'] - mlen, 'len': e['len']})
+                        else:
+                            new_list.append(e)
+                    else:
+                        new_list.append(e - mlen if e > p else e)
+                self._eot_positions = new_list
+                # Restore the extra doc positions for this marker
+                self._doc_extra = max(0, self._doc_extra - (mlen - 1))
+                # Notify controller: BS sentinel — 1 _arr entry removed
                 self.char_typed.emit('\x08', '')
             else:
                 # Normal backspace — notify controller then delete
                 self.char_typed.emit('\x08', '')
                 super().keyPressEvent(ev)
-                # Adjust EOT positions after cursor
-                self._eot_positions = [
-                    p - 1 if p >= pos else p
-                    for p in getattr(self, "_eot_positions", [])
-                ]
+                # Shift marker positions after the deleted char
+                new_list = []
+                for e in getattr(self, "_eot_positions", []):
+                    if isinstance(e, dict):
+                        if e['pos'] >= pos:
+                            new_list.append({'pos': e['pos'] - 1, 'len': e['len']})
+                        else:
+                            new_list.append(e)
+                    else:
+                        new_list.append(e - 1 if e >= pos else e)
+                self._eot_positions = new_list
             return
 
         # ── Enter / printable characters ──────────────────────────────
@@ -19592,7 +19771,7 @@ in the TX window and are **not transmitted over the air**.
 |-----|--------|--------|----------|
 | `CTRL+D` | `[^D]` | Orange | Switch to RECEIVE when this position is reached during TX |
 | `CTRL+S` | `[^S]` | Blue | Switch to SEND when this position is reached *(planned)* |
-| `CTRL+T:n` | `[^T:5]` | Purple | Switch to RECEIVE, wait n seconds, then switch back to SEND *(planned)* |
+| `CTRL+T` | `[^T:5]` | Purple | Switch to RECEIVE, wait n seconds, then switch back to SEND |
 
 **Example usage with CTRL+D:**
 ```
@@ -19638,8 +19817,8 @@ Six macros are available for frequently used text (callsign, CQ calls, etc.).
 - Click **Edit Macros** to edit macro names and texts
 - Macros are saved to `Macro.txt` in the program directory
 
-Control characters (`[^D]`, `[^S]`, `[^T:n]`) can also be used in
-macro texts to automate TX/RX switching. *(CTRL+S and CTRL+T planned)*
+Control characters (`[^D]`, `[^T:n]`) can also be used in
+macro texts to automate TX/RX switching.
 
 **Macro text limits:** Name max. 10 characters, text max. 200 characters.
 
@@ -19652,6 +19831,7 @@ macro texts to automate TX/RX switching. *(CTRL+S and CTRL+T planned)*
 | `ALT+X` | Switch to SEND |
 | `ALT+R` | Switch to RECEIVE |
 | `CTRL+D` | Insert `[^D]` EOT marker (auto-switch to RECEIVE) |
+| `CTRL+T` | Insert `[^T:n]` timed marker (RECEIVE n seconds, then auto-SEND) |
 | `CTRL+V` | Paste text from clipboard into TX window |
 | `Backspace` | Delete last unsent character (or entire control marker) |
 
@@ -19676,6 +19856,7 @@ macro texts to automate TX/RX switching. *(CTRL+S and CTRL+T planned)*
 
 - **Before calling CQ:** Set RBAUD to match your intended speed (45 or 50 Baud for most European contacts)
 - **Pre-type your CQ:** Type the full CQ call ending with `[^D]` while in RECEIVE, then press SEND — the TNC will transmit and automatically return to RECEIVE
+- **Timed CQ loop:** Use `[^T:n]` to listen for n seconds and automatically resume sending — e.g. `CQ DE OE3GAS K[^D][^T:5]` transmits the CQ, listens 5 seconds, then keys up again
 - **Monitor your own signal:** The RX window shows your transmitted text in amber after TNC confirmation — if characters are missing, check the RBAUD setting
 - **Buffer management:** For long texts, use CTRL+D markers to break transmission into segments with listening pauses
 

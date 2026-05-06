@@ -27,26 +27,27 @@ from PyQt6.QtCore import Qt
 
 
 class MacroTextEdit(QTextEdit):
-    """QTextEdit for macro text with CTRL+D and CTRL+S support.
+    """QTextEdit for macro text with CTRL+D and CTRL+T support.
 
-    CTRL+D inserts "[^D]" (4 visible ASCII chars) with orange inverse styling.
-    CTRL+S inserts "[^S]" (4 visible ASCII chars) with blue inverse styling.
-    Backspace detects cursor right after either marker and deletes
-    all 4 chars atomically — same approach as TxInputWidget._eot_positions.
+    CTRL+D inserts "[^D]" (4 chars) with orange inverse styling.
+    CTRL+T opens a dialog for n (1–10), inserts "[^T:n]" (6–7 chars)
+    with purple inverse styling.
+    Backspace detects cursor right after any marker and deletes it
+    atomically — _eot_positions stores {pos, len} dicts.
 
     No private-use Unicode — works on all Windows fonts.
-    Stored as "[^D]" / "[^S]" in Macro.txt (human-readable).
+    Stored as "[^D]" / "[^T:n]" in Macro.txt (human-readable).
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._eot_positions: list[int] = []
+        self._eot_positions: list[dict] = []  # {'pos': int, 'len': int}
 
     def keyPressEvent(self, ev: QKeyEvent) -> None:
         key  = ev.key()
         mods = ev.modifiers()
 
-        # CTRL+D — insert [^D] orange marker (switch to RECEIVE when reached)
+        # CTRL+D — insert [^D] orange marker (switch to RECEIVE)
         if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_D:
             f_eot = QTextCharFormat()
             f_eot.setForeground(QColor("#ffffff"))
@@ -59,46 +60,59 @@ class MacroTextEdit(QTextEdit):
             c.insertText("[^D]")
             c.setCharFormat(f_normal)
             self.setTextCursor(c)
-            self._eot_positions.append(pos)
+            self._eot_positions.append({'pos': pos, 'len': 4})
             return
 
-        # CTRL+S — insert [^S] blue marker (switch to SEND when reached)
-        if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_S:
-            f_sos = QTextCharFormat()
-            f_sos.setForeground(QColor("#ffffff"))
-            f_sos.setBackground(QColor("#0044cc"))
-            f_sos.setFontWeight(700)
+        # CTRL+T — open n dialog, insert [^T:n] purple marker (timed RECEIVE)
+        if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_T:
+            from PyQt6.QtWidgets import QInputDialog
+            n, ok = QInputDialog.getInt(
+                self, "Timed Marker",
+                "Wait time in seconds (1–10):",
+                value=5, min=1, max=10
+            )
+            if not ok:
+                return
+            marker = f"[^T:{n}]"
+            marker_len = len(marker)
+            f_tmr = QTextCharFormat()
+            f_tmr.setForeground(QColor("#ffffff"))
+            f_tmr.setBackground(QColor("#8800cc"))
+            f_tmr.setFontWeight(700)
             f_normal = QTextCharFormat()
             c = self.textCursor()
             pos = c.position()
-            c.setCharFormat(f_sos)
-            c.insertText("[^S]")
+            c.setCharFormat(f_tmr)
+            c.insertText(marker)
             c.setCharFormat(f_normal)
             self.setTextCursor(c)
-            self._eot_positions.append(pos)
+            self._eot_positions.append({'pos': pos, 'len': marker_len})
             return
 
-        # Backspace — atomic delete of [^D] if cursor is right after it
+        # Backspace — atomic delete of any marker if cursor is right after it
         if key == Qt.Key.Key_Backspace:
             c = self.textCursor()
             pos = c.position()
-            for eot_pos in list(self._eot_positions):
-                if pos == eot_pos + 4:
-                    c.setPosition(eot_pos)
-                    c.setPosition(eot_pos + 4,
-                                  QTextCursor.MoveMode.KeepAnchor)
+            for entry in list(self._eot_positions):
+                p   = entry['pos']
+                mlen = entry['len']
+                if pos == p + mlen:
+                    c.setPosition(p)
+                    c.setPosition(p + mlen, QTextCursor.MoveMode.KeepAnchor)
                     c.removeSelectedText()
-                    self._eot_positions.remove(eot_pos)
+                    self._eot_positions.remove(entry)
                     self._eot_positions = [
-                        p - 4 if p > eot_pos else p
-                        for p in self._eot_positions
+                        {'pos': e['pos'] - mlen, 'len': e['len']}
+                        if e['pos'] > p else e
+                        for e in self._eot_positions
                     ]
                     return
             # Normal backspace — shift tracked positions
             if not c.hasSelection():
                 self._eot_positions = [
-                    p - 1 if p >= pos else p
-                    for p in self._eot_positions
+                    {'pos': e['pos'] - 1, 'len': e['len']}
+                    if e['pos'] >= pos else e
+                    for e in self._eot_positions
                 ]
             super().keyPressEvent(ev)
             return
@@ -338,10 +352,10 @@ class MacroEditDialog(QDialog):
         f_eot.setForeground(QColor("#ffffff"))
         f_eot.setBackground(QColor("#cc4400"))
         f_eot.setFontWeight(700)
-        f_sos = QTextCharFormat()
-        f_sos.setForeground(QColor("#ffffff"))
-        f_sos.setBackground(QColor("#0044cc"))
-        f_sos.setFontWeight(700)
+        f_tmr = QTextCharFormat()
+        f_tmr.setForeground(QColor("#ffffff"))
+        f_tmr.setBackground(QColor("#8800cc"))
+        f_tmr.setFontWeight(700)
         i = 0
         while i < len(text):
             if text[i:i+4] == '[^D]':
@@ -349,11 +363,21 @@ class MacroEditDialog(QDialog):
                 cursor.insertText('[^D]')   # 4 orange chars
                 cursor.setCharFormat(f_normal)
                 i += 4
-            elif text[i:i+4] == '[^S]':
-                cursor.setCharFormat(f_sos)
-                cursor.insertText('[^S]')   # 4 blue chars
-                cursor.setCharFormat(f_normal)
-                i += 4
+            elif text[i:i+4] == '[^T:':
+                # Read [^T:n] or [^T:10]
+                j = i + 4
+                while j < len(text) and text[j].isdigit():
+                    j += 1
+                if j < len(text) and text[j] == ']':
+                    marker = text[i:j+1]
+                    cursor.setCharFormat(f_tmr)
+                    cursor.insertText(marker)   # purple chars
+                    cursor.setCharFormat(f_normal)
+                    i = j + 1
+                else:
+                    cursor.setCharFormat(f_normal)
+                    cursor.insertText(text[i])
+                    i += 1
             elif text[i] == '\n':
                 cursor.setCharFormat(f_normal)
                 cursor.insertBlock()
