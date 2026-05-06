@@ -27,14 +27,15 @@ from PyQt6.QtCore import Qt
 
 
 class MacroTextEdit(QTextEdit):
-    """QTextEdit for macro text with CTRL+D support.
+    """QTextEdit for macro text with CTRL+D and CTRL+S support.
 
-    CTRL+D inserts "[^D]" (4 visible ASCII chars) with orange inverse
-    styling. Backspace detects cursor right after "[^D]" and deletes
+    CTRL+D inserts "[^D]" (4 visible ASCII chars) with orange inverse styling.
+    CTRL+S inserts "[^S]" (4 visible ASCII chars) with blue inverse styling.
+    Backspace detects cursor right after either marker and deletes
     all 4 chars atomically — same approach as TxInputWidget._eot_positions.
 
     No private-use Unicode — works on all Windows fonts.
-    Stored as "[^D]" in Macro.txt (human-readable).
+    Stored as "[^D]" / "[^S]" in Macro.txt (human-readable).
     """
 
     def __init__(self, parent=None):
@@ -45,7 +46,7 @@ class MacroTextEdit(QTextEdit):
         key  = ev.key()
         mods = ev.modifiers()
 
-        # CTRL+D — insert [^D] orange marker
+        # CTRL+D — insert [^D] orange marker (switch to RECEIVE when reached)
         if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_D:
             f_eot = QTextCharFormat()
             f_eot.setForeground(QColor("#ffffff"))
@@ -56,6 +57,22 @@ class MacroTextEdit(QTextEdit):
             pos = c.position()
             c.setCharFormat(f_eot)
             c.insertText("[^D]")
+            c.setCharFormat(f_normal)
+            self.setTextCursor(c)
+            self._eot_positions.append(pos)
+            return
+
+        # CTRL+S — insert [^S] blue marker (switch to SEND when reached)
+        if mods == Qt.KeyboardModifier.ControlModifier and key == Qt.Key.Key_S:
+            f_sos = QTextCharFormat()
+            f_sos.setForeground(QColor("#ffffff"))
+            f_sos.setBackground(QColor("#0044cc"))
+            f_sos.setFontWeight(700)
+            f_normal = QTextCharFormat()
+            c = self.textCursor()
+            pos = c.position()
+            c.setCharFormat(f_sos)
+            c.insertText("[^S]")
             c.setCharFormat(f_normal)
             self.setTextCursor(c)
             self._eot_positions.append(pos)
@@ -321,11 +338,20 @@ class MacroEditDialog(QDialog):
         f_eot.setForeground(QColor("#ffffff"))
         f_eot.setBackground(QColor("#cc4400"))
         f_eot.setFontWeight(700)
+        f_sos = QTextCharFormat()
+        f_sos.setForeground(QColor("#ffffff"))
+        f_sos.setBackground(QColor("#0044cc"))
+        f_sos.setFontWeight(700)
         i = 0
         while i < len(text):
             if text[i:i+4] == '[^D]':
                 cursor.setCharFormat(f_eot)
                 cursor.insertText('[^D]')   # 4 orange chars
+                cursor.setCharFormat(f_normal)
+                i += 4
+            elif text[i:i+4] == '[^S]':
+                cursor.setCharFormat(f_sos)
+                cursor.insertText('[^S]')   # 4 blue chars
                 cursor.setCharFormat(f_normal)
                 i += 4
             elif text[i] == '\n':

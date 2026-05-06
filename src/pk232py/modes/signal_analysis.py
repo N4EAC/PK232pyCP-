@@ -71,7 +71,7 @@ class SignalMode(BaseMode):
         Called with the SIAM analysis result string from the TNC.
     """
 
-    name         = "Signal"
+    name         = "Signal (SIAM)"
     host_command = b'SI'
     verbose_command = b"SIGNAL\r\n"
 

@@ -91,7 +91,7 @@ class MorseMode(BaseMode):
         Called when TNC acknowledges a sent data block.
     """
 
-    name         = "CW/Morse"
+    name         = "CW / Morse"
     host_command = b'MO'
     verbose_command = b"MORSE\r\n"
 

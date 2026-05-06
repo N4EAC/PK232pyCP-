@@ -125,7 +125,7 @@ class AMTORMode(BaseMode):
         Called when TNC acknowledges a sent data block ($5F $00).
     """
 
-    name         = "AMTOR"
+    name         = "AMTOR ARQ"
     host_command = b'AM'
     verbose_command = b"AMTOR\r\n"
 

@@ -133,6 +133,7 @@ class TxInputWidget(QTextEdit):
     - set_cycle_anchor() — updates doc position anchor for colour_at()
     - Edit protection   — already-sent chars (inverse green) cannot be modified
     - CTRL+D            — inserts [^D] EOT marker (char = \x04)
+    - CTRL+S            — inserts [^S] SOS marker (char = \x13)
     - insertFromMimeData — paste fires char_typed per character
 
     Colour conventions (theme-aware):
@@ -324,7 +325,7 @@ class TxInputWidget(QTextEdit):
             self._push_cursor_to_boundary()
             return
 
-        # CTRL+D: insert [^D] EOT marker
+        # CTRL+D: insert [^D] EOT marker (switch to RECEIVE when reached)
         if mods == Ctrl and key == Qt.Key.Key_D:
             f_eot = QTextCharFormat()
             f_eot.setForeground(QColor("#ffffff"))
@@ -342,6 +343,26 @@ class TxInputWidget(QTextEdit):
             # [^D] = 4 doc chars but 1 _arr entry → 3 extra doc positions
             self._doc_extra += 3
             self.char_typed.emit("\x04", "[^D]")
+            return
+
+        # CTRL+S: insert [^S] SOS marker (switch to SEND when reached)
+        if mods == Ctrl and key == Qt.Key.Key_S:
+            f_sos = QTextCharFormat()
+            f_sos.setForeground(QColor("#ffffff"))
+            f_sos.setBackground(QColor("#0044cc"))
+            f_sos.setFontWeight(700)
+            c = self.textCursor()
+            sos_doc_pos = c.position()
+            c.setCharFormat(f_sos)
+            c.insertText("[^S]")
+            c.setCharFormat(f_normal)
+            self.setTextCursor(c)
+            if not hasattr(self, "_eot_positions"):
+                self._eot_positions: list[int] = []
+            self._eot_positions.append(sos_doc_pos)
+            # [^S] = 4 doc chars but 1 _arr entry → 3 extra doc positions
+            self._doc_extra += 3
+            self.char_typed.emit("\x13", "[^S]")
             return
 
         # ── Any key touching protected zone ───────────────────────────
@@ -485,9 +506,16 @@ class RttyBaseScreen(QWidget):
 
     def eventFilter(self, obj, event) -> bool:
         if event.type() == QEvent.Type.KeyPress:
-            focused = self.focusWidget()
             from PyQt6.QtWidgets import QTextEdit, QLineEdit
-            if isinstance(focused, (QTextEdit, QLineEdit)):
+            # Walk parent chain: in an app-wide filter obj may be an
+            # internal child widget, not the QLineEdit/QTextEdit itself.
+            def _is_input(w):
+                while w is not None:
+                    if isinstance(w, (QTextEdit, QLineEdit)):
+                        return True
+                    w = w.parent()
+                return False
+            if _is_input(self.focusWidget()) or _is_input(obj):
                 return super().eventFilter(obj, event)
             if hasattr(self, 'tx_input') and self.tx_input is not None:
                 self.tx_input.setFocus()

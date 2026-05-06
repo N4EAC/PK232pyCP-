@@ -1,0 +1,11 @@
+# PK232PY Macros
+# Format: NAME|TEXT  (Name max. 10, Text max. 200 chars)
+# Line breaks in text are stored as \n.
+# This file can be edited directly with a text editor.
+#
+CQ|CQ de OE3GAS\npse k[^D]
+73|73 de OE3GAS[^D]
+RIG|My Rig: IC-7300, IC-7610, 7ele 3band yagi, PK232[^D]
+Macro 4|
+Macro 5|
+Macro 6|

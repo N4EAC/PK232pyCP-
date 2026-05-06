@@ -1,0 +1,6 @@
+Erstelle
+* AMTOR_ARQ_STATE_MACHINE.md🟡 2			Vor AMTOR-Implementierung
+* PACKET_CONNECTION_STATE_MACHINE.md🟡 2	Vor Packet-Implementierung
+* PARAMS_UPLOAD_FLOW.md🟡 2					Vor nächstem Upload-Umbau
+* MACRO_SYSTEM_DATA_FLOW.md🟢 3				Vor Widget-Phase
+* CONFIG_INI_SCHEMA.md🟢 3					Vor Dialog-Implementierung

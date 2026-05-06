@@ -50,7 +50,8 @@ from .screens.morse_screen   import MorseScreen
 from .screens.navtex_screen  import NavtexScreen
 from .screens.signal_screen  import SignalScreen
 from .screens.fax_screen     import FaxScreen
-from .screens.pactor_screen  import PactorScreen   # added
+from .screens.pactor_screen  import PactorScreen
+from .screens.packet_screen  import HFPacketScreen, VHFPacketScreen
 from .screens.baudot_tx_controller import BaudotTxController
 
 logger = logging.getLogger(__name__)
@@ -373,7 +374,9 @@ class MainWindow(QMainWindow):
             "ASCII RTTY":    AsciiScreen(),
             "AMTOR ARQ":     _amtor,
             "AMTOR FEC":     _amtor,       # same screen, different sub-mode
-            "PACTOR":        PactorScreen(),   # added
+            "PACTOR":        PactorScreen(),
+            "HF Packet":     HFPacketScreen(),
+            "VHF Packet":    VHFPacketScreen(),
             "CW / Morse":    MorseScreen(),
             "NAVTEX":        NavtexScreen(),
             "Signal (SIAM)": SignalScreen(),
@@ -597,6 +600,27 @@ class MainWindow(QMainWindow):
             screen.btn_receive.blockSignals(False)
             # Trigger visual update directly (signals blocked above)
             screen._on_receive_toggled(True)
+
+        # For Packet screens: populate MYCALL label from AppConfig.
+        if name in ("HF Packet", "VHF Packet") and hasattr(screen, "set_mycall"):
+            mycall = getattr(self._app_config.hf_packet, "mycall", "")
+            if not mycall or mycall.upper() == "NOCALL":
+                mycall = ""
+            screen.set_mycall(mycall)
+
+        # For PACTOR: populate lbl_myptcall from AppConfig if set.
+        if name == "PACTOR" and hasattr(screen, "lbl_myptcall"):
+            myptcall = getattr(self._app_config.pactor, "myptcall", "")
+            if myptcall and myptcall.upper() != "NOCALL":
+                screen.lbl_myptcall.setText(myptcall.upper())
+
+        # For AMTOR: populate lbl_myselcal / lbl_myaltcal from AppConfig if set.
+        if name in ("AMTOR ARQ", "AMTOR FEC"):
+            amtor_cfg = self._app_config.amtor
+            if hasattr(screen, "lbl_myselcal") and amtor_cfg.myselcal:
+                screen.lbl_myselcal.setText(amtor_cfg.myselcal.upper())
+            if hasattr(screen, "lbl_myaltcal") and amtor_cfg.myaltcal:
+                screen.lbl_myaltcal.setText(amtor_cfg.myaltcal.upper())
 
         # Focus the TX window of the new screen immediately
         QTimer.singleShot(0, self._focus_active_tx)
@@ -1013,7 +1037,10 @@ class MainWindow(QMainWindow):
             if "connected" in m and "disconnect" not in m:
                 status = "CONNECTED"
             elif "disconnect" in m:
-                status = "DISCONN"
+                # PactorScreen uses "DISCONN"; PacketBaseScreen uses "DISCONNECTED"
+                from .screens.packet_screen import PacketBaseScreen
+                status = "DISCONNECTED" if isinstance(screen, PacketBaseScreen) \
+                         else "DISCONN"
             elif "calling" in m or "connect request" in m:
                 status = "CALLING"
             elif "fec" in m:
@@ -1057,6 +1084,9 @@ class MainWindow(QMainWindow):
 
         # PACTOR mode buttons
         self._wire_pactor_buttons(screen)
+
+        # Packet mode buttons (HF + VHF Packet)
+        self._wire_packet_buttons(screen)
 
         # RBAUD dropdown — currentIndexChanged: send RB frame to TNC
         if hasattr(screen, "combo_rbaud"):
@@ -1118,6 +1148,11 @@ class MainWindow(QMainWindow):
             except (RuntimeError, TypeError):
                 pass
             self._baudot_ctrl.eot_reached.connect(self._on_baudot_eot)
+            try:
+                self._baudot_ctrl.sos_reached.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            self._baudot_ctrl.sos_reached.connect(self._on_baudot_sos)
             try:
                 self._baudot_ctrl.status_msg.disconnect()
             except (RuntimeError, TypeError):
@@ -1309,6 +1344,20 @@ class MainWindow(QMainWindow):
                 tx._doc_extra = getattr(tx, '_doc_extra', 0) + 3
                 tx.char_typed.emit('\x04', '[^D]')
                 i += 4
+            elif text[i:i+4] == '[^S]':
+                # SOS marker — emit sentinel, insert visual marker in TX
+                from PyQt6.QtGui import QTextCharFormat as _TCF, QColor as _QC
+                f_sos = _TCF()
+                f_sos.setForeground(_QC("#ffffff"))
+                f_sos.setBackground(_QC("#0044cc"))
+                f_sos.setFontWeight(700)
+                tx.setCurrentCharFormat(f_sos)
+                tx.textCursor().insertText('[^S]')
+                tx.setCurrentCharFormat(f)
+                # [^S] = 4 doc chars, 1 _arr entry → track discrepancy
+                tx._doc_extra = getattr(tx, '_doc_extra', 0) + 3
+                tx.char_typed.emit('\x13', '[^S]')
+                i += 4
             elif text[i] == '\n':
                 tx.setCurrentCharFormat(f)
                 c = tx.textCursor()
@@ -1424,6 +1473,18 @@ class MainWindow(QMainWindow):
         screen = self._opmode_stack.currentWidget()
         if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
             screen.btn_receive.setChecked(True)
+
+    def _on_baudot_sos(self) -> None:
+        """[^S] SOS marker reached — switch to SEND.
+
+        Only activates if we are currently in RECEIVE mode (btn_send not
+        already checked). Setting btn_send.setChecked(True) fires the
+        toggled signal, which calls _on_screen_send(True) — same path
+        as pressing the SEND button manually.
+        """
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, 'btn_send') and not screen.btn_send.isChecked():
+            screen.btn_send.setChecked(True)
 
     def _on_baudot_warning(self, msg: str) -> None:
         """Handle warnings from BaudotTxController.
@@ -1648,7 +1709,15 @@ class MainWindow(QMainWindow):
         _conn("btn_achg",       self._on_amtor_achg)
 
     def _wire_pactor_buttons(self, screen) -> None:
-        """Connect PACTOR mode buttons to TNC commands."""
+        """Connect PACTOR mode buttons to TNC commands.
+
+        Only wires if screen is a PactorScreen instance —
+        PacketBaseScreen also has btn_connect and would otherwise
+        receive the PACTOR slots, causing a double warning dialog.
+        """
+        from .screens.pactor_screen import PactorScreen
+        if not isinstance(screen, PactorScreen):
+            return
         def _conn(btn_name: str, slot) -> None:
             btn = getattr(screen, btn_name, None)
             if btn is None:
@@ -1668,6 +1737,66 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     # AMTOR slots
     # ------------------------------------------------------------------
+
+    def _wire_packet_buttons(self, screen) -> None:
+        """Wire HF/VHF Packet screen buttons to MainWindow slots.
+
+        Called from _wire_screen_buttons() whenever the active screen changes.
+        Uses try/disconnect to avoid stacking signals on repeated calls.
+        Skips silently for any screen that is not a PacketBaseScreen.
+        """
+        if not hasattr(screen, "btn_connect"):
+            return
+        from .screens.packet_screen import PacketBaseScreen
+        if not isinstance(screen, PacketBaseScreen):
+            return
+
+        def _rewire(signal, slot):
+            """Disconnect previous connection, then reconnect."""
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+            signal.connect(slot)
+
+        # Connect button: visual feedback in screen + CO frame in MainWindow
+        _rewire(screen.btn_connect.toggled, screen.on_connect_toggled)
+        _rewire(screen.btn_connect.toggled, self._on_packet_connect)
+
+        # Disconnect button
+        _rewire(screen.btn_disconnect.clicked, self._on_packet_disconnect)
+
+        # Unproto button: visual feedback in screen + UN frame in MainWindow
+        _rewire(screen.btn_unproto.toggled, screen.on_unproto_toggled)
+        _rewire(screen.btn_unproto.toggled, self._on_packet_unproto)
+
+        # MailDrop button
+        _rewire(screen.btn_maildrop.clicked, self._on_packet_maildrop)
+
+        # MHEARD Refresh button
+        _rewire(screen.mheard_panel.btn_refresh.clicked, self._on_packet_mheard)
+
+        # HBAUD dropdown
+        _rewire(screen.combo_hbaud.currentIndexChanged,
+                self._on_packet_hbaud_changed)
+
+        # Monitor level dropdown
+        _rewire(screen.combo_monitor.currentIndexChanged,
+                self._on_packet_monitor_changed)
+
+        # Toggle buttons: EAS / PASSALL / MRPT / MID / SQUELCH
+        toggle_map = [
+            (screen.btn_eas,     b'EA'),
+            (screen.btn_passall, b'PA'),
+            (screen.btn_mrpt,    b'MR'),
+            (screen.btn_mid,     b'MI'),
+            (screen.btn_squelch, b'SQ'),
+        ]
+        for btn, mnemonic in toggle_map:
+            _rewire(
+                btn.toggled,
+                lambda checked, mn=mnemonic: self._on_packet_toggle(mn, checked)
+            )
 
     def _amtor_send(self, frame: bytes) -> bool:
         """Send a pre-built AMTOR command frame. Returns True on success."""
@@ -1814,18 +1943,149 @@ class MainWindow(QMainWindow):
         self._serial.send_command(frame[2:4], frame[4:-1])
         self._log_monitor("[PACTOR] Standby")
 
+    # ------------------------------------------------------------------
+    # Packet slots
+    # ------------------------------------------------------------------
+
+    def _on_packet_connect(self, checked: bool) -> None:
+        """Connect button toggled — send CO frame to TNC.
+
+        checked=True:  validate Dest field, send CO {callsign} on channel 0.
+        checked=False: no TNC command — user uses Disconnect button to DI.
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        if not checked:
+            return
+        screen = self._opmode_stack.currentWidget()
+        dest = getattr(screen, "le_dest", None)
+        if dest is None:
+            return
+        callsign = dest.text().strip().upper()
+        if not callsign:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.warning(
+                self, "Packet Connect",
+                "Please enter a destination callsign in the Dest field."
+            )
+            screen.btn_connect.blockSignals(True)
+            screen.btn_connect.setChecked(False)
+            screen.btn_connect.blockSignals(False)
+            screen.on_connect_toggled(False)
+            return
+        from pk232py.comm.frame import build_ch_cmd
+        frame = build_ch_cmd(0, b'CO', callsign.encode('ascii'))
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[PACKET] Connecting \u2192 {callsign}")
+
+    def _on_packet_disconnect(self) -> None:
+        """Disconnect button clicked — send DI frame to TNC."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.comm.frame import build_ch_cmd
+        frame = build_ch_cmd(0, b'DI')
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor("[PACKET] Disconnect sent")
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, "_set_status"):
+            screen._set_status("DISCONNECTED")
+        if hasattr(screen, "btn_connect"):
+            screen.btn_connect.blockSignals(True)
+            screen.btn_connect.setChecked(False)
+            screen.btn_connect.blockSignals(False)
+            screen.on_connect_toggled(False)
+
+    def _on_packet_unproto(self, checked: bool) -> None:
+        """Unproto button toggled — set TNC UNPROTO path.
+
+        checked=True:  send UN {path} to TNC.
+        checked=False: no TNC command needed.
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        if not checked:
+            return
+        screen = self._opmode_stack.currentWidget()
+        unproto_field = getattr(screen, "le_unproto", None)
+        path = unproto_field.text().strip().upper() if unproto_field else "CQ"
+        if not path:
+            path = "CQ"
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'UN', path.encode('ascii'))
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[PACKET] UNPROTO path \u2192 {path}")
+
+    def _on_packet_maildrop(self) -> None:
+        """MailDrop button clicked — send MDCHECK command to TNC."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'MI')
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor("[PACKET] MDCHECK \u2014 logging in to MailDrop")
+
+    def _on_packet_mheard(self) -> None:
+        """MHEARD Refresh — send MH command to TNC."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'MH')
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor("[PACKET] MHEARD requested")
+
+    def _on_packet_hbaud_changed(self, index: int) -> None:
+        """HBAUD dropdown changed — send HB {value} to TNC."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        screen = self._opmode_stack.currentWidget()
+        combo = getattr(screen, "combo_hbaud", None)
+        if combo is None:
+            return
+        value = combo.currentText()
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'HB', value.encode('ascii'))
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[PACKET] HBAUD \u2192 {value}")
+
+    def _on_packet_monitor_changed(self, index: int) -> None:
+        """Monitor dropdown changed — send MN {level} to TNC."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        screen = self._opmode_stack.currentWidget()
+        combo = getattr(screen, "combo_monitor", None)
+        if combo is None:
+            return
+        value = combo.currentText()
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'MN', value.encode('ascii'))
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[PACKET] Monitor level \u2192 {value}")
+
+    def _on_packet_toggle(self, mnemonic: bytes, checked: bool) -> None:
+        """Generic toggle for EAS / PASSALL / MRPT / MID / SQUELCH.
+
+        Sends mnemonic Y (ON) or mnemonic N (OFF) to TNC.
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.comm.frame import build_command
+        value = b'Y' if checked else b'N'
+        frame = build_command(mnemonic, value)
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(
+            f"[PACKET] {mnemonic.decode()} \u2192 {'ON' if checked else 'OFF'}"
+        )
+
     def _wire_identity_fields(self, screen) -> None:
-        """Wire identity QLineEdit fields to TNC parameter frames.
+        """Wire identity fields to TNC parameter frames.
 
-        Covers:
-          PACTOR  le_myptcall  → PACTORMode.myptcall_frame()  (MK)
-          AMTOR   le_myselcal  → AMTORMode.myselcal_frame()   (MG)
-          AMTOR   le_myaltcal  → AMTORMode.myaltcal_frame()   (MK)
-          AMTOR   le_myident   → AMTORMode.myident_frame()    (MY)
-
-        Uses editingFinished so the frame is only sent when the
-        user leaves the field (Enter or focus-out), not on every
-        keystroke.
+        Note: MYPTCALL, MYSELCAL, MYALTCAL, MYIDENT are now QLabels
+        (display-only).  They are populated via _switch_opmode() from
+        AppConfig.  This method wires only the AMTOR le_myident field
+        which remains as a QLineEdit for direct entry, and NAVTEX fields.
+        The _wire() calls for le_myptcall / le_myselcal / le_myaltcal
+        are kept as no-ops: getattr() returns None for QLabels that
+        don't have editingFinished, so they silently do nothing.
         """
         def _wire(field_name: str, slot) -> None:
             field = getattr(screen, field_name, None)
@@ -2614,7 +2874,18 @@ class MainWindow(QMainWindow):
         else:
             self._sb_mode.setText("Mode: VERBOSE")
             self._set_mode_indicator("verbose")
-            self._stack.setCurrentIndex(1)
+            # Keep the opmode screen (index 0) when a mode switch
+            # temporarily exits Host Mode for verbose activation
+            # (e.g. PACTOR uses verbose_command).  Only switch to
+            # the Verbose terminal view (index 1) when no opmode
+            # screen is active — i.e. a genuine disconnect / error.
+            active_name = self._modes.current_mode_name
+            mode_has_screen = (
+                active_name is not None
+                and active_name in self._opmode_screens
+            )
+            if not mode_has_screen:
+                self._stack.setCurrentIndex(1)
         self._set_sig(self._ssl_host, active)
         if active:
             self._opmode_timer.start()
@@ -2757,9 +3028,12 @@ class MainWindow(QMainWindow):
                             screen.btn_receive.setChecked(True)
                         return True
 
-                    # QLineEdit fields keep their own focus
-                    if isinstance(obj, _LE):
-                        pass
+                    # If the active screen has a ScreenFocusController
+                    # and an input field currently has focus, pass the
+                    # keypress through without redirecting to tx_input.
+                    _focus_ctrl = getattr(screen, 'focus_ctrl', None)
+                    if _focus_ctrl is not None and _focus_ctrl.is_active():
+                        return super().eventFilter(obj, event)
                     elif obj is not tx:
                         # Redirect all other keypresses to tx_input.
                         # TxInputWidget.keyPressEvent handles char_typed emission

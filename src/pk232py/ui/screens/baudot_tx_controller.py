@@ -69,6 +69,8 @@ class BaudotTxController(QObject):
         Update status bar.
     eot_reached()
         CTRL+D EOT marker reached — switch to RECEIVE.
+    sos_reached()
+        CTRL+S SOS marker reached — switch to SEND.
     """
 
     colour_char = pyqtSignal(int, bool)   # (arr_idx, sent)
@@ -77,6 +79,7 @@ class BaudotTxController(QObject):
     warning     = pyqtSignal(str)
     status_msg  = pyqtSignal(str)
     eot_reached = pyqtSignal()
+    sos_reached = pyqtSignal()   # [^S] marker reached — switch to SEND
 
     TX_MAX = 512
 
@@ -222,7 +225,7 @@ class BaudotTxController(QObject):
     def still_to_transmit(self) -> bool:
         """True if real chars (not just EOT markers) remain unsent."""
         remaining = self._arr[self._tx_sent_idx:]
-        return any(e['char'] != '\x04' for e in remaining)
+        return any(e['char'] not in ('\x04', '\x13') for e in remaining)
 
     def clear(self) -> None:
         """Reset all state — call when Host Mode becomes active."""
@@ -280,6 +283,11 @@ class BaudotTxController(QObject):
             self._tx_timer.stop()
             self.status_msg.emit("EOT marker reached — switching to RECEIVE")
             self.eot_reached.emit()
+            return
+        if char == '\x13':
+            # [^S] SOS marker — do NOT send to TNC, trigger SEND
+            self.status_msg.emit("[^S] marker reached — switching to SEND")
+            self.sos_reached.emit()
             return
         self.send_to_tnc.emit(char)
         if self._tx_queue:

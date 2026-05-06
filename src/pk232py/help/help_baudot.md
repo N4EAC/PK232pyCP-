@@ -71,7 +71,7 @@ in the TX window and are **not transmitted over the air**.
 | Key | Marker | Colour | Function |
 |-----|--------|--------|----------|
 | `CTRL+D` | `[^D]` | Orange | Switch to RECEIVE when this position is reached during TX |
-| `CTRL+S` | `[^S]` | Blue | Switch to SEND when this position is reached *(planned)* |
+| `CTRL+S` | `[^S]` | Blue | Switch to SEND when this position is reached during TX |
 | `CTRL+T:n` | `[^T:5]` | Purple | Switch to RECEIVE, wait n seconds, then switch back to SEND *(planned)* |
 
 **Example usage with CTRL+D:**
@@ -132,6 +132,7 @@ macro texts to automate TX/RX switching. *(CTRL+S and CTRL+T planned)*
 | `ALT+X` | Switch to SEND |
 | `ALT+R` | Switch to RECEIVE |
 | `CTRL+D` | Insert `[^D]` EOT marker (auto-switch to RECEIVE) |
+| `CTRL+S` | Insert `[^S]` SOS marker (auto-switch to SEND) |
 | `CTRL+V` | Paste text from clipboard into TX window |
 | `Backspace` | Delete last unsent character (or entire control marker) |
 
@@ -156,6 +157,7 @@ macro texts to automate TX/RX switching. *(CTRL+S and CTRL+T planned)*
 
 - **Before calling CQ:** Set RBAUD to match your intended speed (45 or 50 Baud for most European contacts)
 - **Pre-type your CQ:** Type the full CQ call ending with `[^D]` while in RECEIVE, then press SEND — the TNC will transmit and automatically return to RECEIVE
+- **Auto-repeat CQ:** Use `[^S]` after `[^D]` to automatically switch back to SEND after a listening pause — e.g. `CQ DE OE3GAS[^D][^S]` for continuous CQ
 - **Monitor your own signal:** The RX window shows your transmitted text in amber after TNC confirmation — if characters are missing, check the RBAUD setting
 - **Buffer management:** For long texts, use CTRL+D markers to break transmission into segments with listening pauses
 

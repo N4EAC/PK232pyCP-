@@ -141,6 +141,14 @@ class PactorScreen(QWidget):
 
         self._build_ui()
 
+        # ScreenFocusController: tracks focus on le_dest (editable).
+        # lbl_myptcall is a QLabel — no focus tracking needed.
+        from .screen_focus_controller import ScreenFocusController
+        self.focus_ctrl = ScreenFocusController(
+            fields=[self.le_dest],
+            parent=self,
+        )
+
         # EventFilter: redirects all keypresses to TX window
         self.installEventFilter(self)
         # Initial focus: cursor goes straight to TX window on open
@@ -157,12 +165,18 @@ class PactorScreen(QWidget):
         the event is forwarded normally — e.g. for MYPTCALL or Dest fields.
         """
         if event.type() == QEvent.Type.KeyPress:
-            focused = self.focusWidget()
-            if isinstance(focused, (QTextEdit, QLineEdit)):
+            # Walk parent chain: in an app-wide filter obj may be an
+            # internal child widget, not the QLineEdit/QTextEdit itself.
+            def _is_input(w):
+                while w is not None:
+                    if isinstance(w, (QTextEdit, QLineEdit)):
+                        return True
+                    w = w.parent()
+                return False
+            if _is_input(self.focusWidget()) or _is_input(obj):
                 return super().eventFilter(obj, event)
             if hasattr(self, "tx_input") and self.tx_input is not None:
                 self.tx_input.setFocus()
-                from PyQt6.QtWidgets import QApplication
                 QApplication.sendEvent(self.tx_input, event)
                 return True
         return super().eventFilter(obj, event)
@@ -198,18 +212,14 @@ class PactorScreen(QWidget):
         lbl.setFixedWidth(80)
         myptcall_row.addWidget(lbl)
 
-        self.le_myptcall = QLineEdit()
-        self.le_myptcall.setMaxLength(14)          # max callsign length
-        self.le_myptcall.setFixedWidth(CALL_W)
-        self.le_myptcall.setFont(QFont("Courier New", 10))
-        self.le_myptcall.setPlaceholderText("e.g. OE3GAS")
-        self.le_myptcall.setToolTip(
+        self.lbl_myptcall = QLabel("---")
+        self.lbl_myptcall.setFixedWidth(CALL_W)
+        self.lbl_myptcall.setFont(QFont("Courier New", 10, QFont.Weight.Bold))
+        self.lbl_myptcall.setToolTip(
             "PACTOR callsign (MYPTCALL / mnemonic MK).\n"
-            "Separate from MYCALL — allows portable suffixes\n"
-            "e.g. ZL2/OE3GAS.\n\n"
-            "Required before any PACTOR transmission."
+            "Set via TNC \u2192 PACTOR Parameters."
         )
-        myptcall_row.addWidget(self.le_myptcall)
+        myptcall_row.addWidget(self.lbl_myptcall)
         myptcall_row.addStretch()
         root.addLayout(myptcall_row)
 
