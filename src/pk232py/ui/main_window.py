@@ -93,6 +93,18 @@ class MainWindow(QMainWindow):
         self._baudot_ctrl.set_mspeed(50)   # default 50 Baud — updated from config
         # Re-entry guard for eventFilter.
         self._in_event_filter: bool = False
+        # Flag: True when user explicitly requested Host Mode exit
+        # (Leave Host Mode button/menu). Ensures the verbose
+        # terminal is shown even if an opmode screen is still active.
+        # PACTOR temporarily exits Host Mode but keeps its screen —
+        # it does NOT set this flag.
+        self._exiting_host_mode_by_user: bool = False
+
+        # Packet monitor frame buffer — used for APRS re-decode on toggle.
+        # Each entry is (utc_timestamp_str, raw_frame_text).
+        # When APRS toggle fires, _packet_rx_redraw() re-renders all entries.
+        self._packet_raw_frames: list[tuple[str, str]] = []
+        self._packet_aprs_active: bool = False
 
         self._build_ui()
         self._connect_signals()
@@ -206,6 +218,7 @@ class MainWindow(QMainWindow):
         param_menu = mb.addMenu("&Parameters")
         # Implemented dialogs
         _implemented = {"HF Packet...", "Misc...", "PACTOR...", "AMTOR / NAVTEX / TDM...", "BAUDOT / ASCII / CW...", "MailDrop..."}
+        self._act_params_pactor = None
         for label, slot in [
             ("HF Packet...",             self._on_params_hf_packet),
             ("PACTOR...",                self._on_params_pactor),
@@ -218,6 +231,8 @@ class MainWindow(QMainWindow):
             act.setEnabled(label in _implemented)
             act.triggered.connect(slot)
             param_menu.addAction(act)
+            if label == "PACTOR...":
+                self._act_params_pactor = act
 
  # Configure 
         cfg_menu = mb.addMenu("&Configure")
@@ -284,6 +299,17 @@ class MainWindow(QMainWindow):
         self._mode_combo.setEnabled(False)
         self._mode_combo.currentTextChanged.connect(self._on_mode_selected)
         tb.addWidget(self._mode_combo)
+
+        # TNC Firmware version label — populated in _on_verbose_mode_ready()
+        tb.addSeparator()
+        tb.addWidget(QLabel(" TNC-Firmware: "))
+        self._lbl_firmware = QLabel("—")
+        self._lbl_firmware.setFont(QFont("Courier New", 9))
+        self._lbl_firmware.setStyleSheet("color: #88aacc;")
+        self._lbl_firmware.setToolTip(
+            "TNC firmware version from boot banner"
+        )
+        tb.addWidget(self._lbl_firmware)
 
         # ── Spacer + Mode/Connection status indicator (right-aligned) ────────
         spacer = QWidget()
@@ -836,12 +862,60 @@ class MainWindow(QMainWindow):
         self._log_monitor("[SYS] TNC in verbose mode")
         self._sb_mode.setText("Mode: VERBOSE")
         self._set_mode_indicator("verbose")
+
+        # Parse firmware version from TNC banner and show in toolbar.
+        # Banner example: "AEA PK-232M ...\nRelease 01.AUG.91"
+        # We extract the 'Release xx.MON.YY' token.
+        _banner = getattr(self._serial, 'tnc_banner', '')
+        _fw = "unknown"
+        for _line in _banner.splitlines():
+            _line = _line.strip()
+            if _line.lower().startswith("release"):
+                _fw = _line   # e.g. "Release 01.AUG.91"
+                break
+        if hasattr(self, '_lbl_firmware'):
+            self._lbl_firmware.setText(_fw)
         self._stack.setCurrentIndex(1)
         self._vt_input.setFocus()
         self._vt_display.clear()
         self._vt_append("[SYS] TNC ready in verbose mode\n")
-        # Enable mode selector -- all modes with verbose_command selectable here
+        # Enable mode selector
         self._mode_combo.setEnabled(True)
+
+        # Disable 'PACTOR' entry when TNC has no PACTOR option.
+        # QStandardItemModel.item(idx).setEnabled(False) greys out
+        # the entry so the user sees it is unavailable.
+        _has_pactor = getattr(self._serial, 'has_pactor', True)
+
+        # Disable PACTOR opmode in ComboBox
+        _cb_model = self._mode_combo.model()
+        for _i in range(self._mode_combo.count()):
+            if self._mode_combo.itemText(_i) == "PACTOR":
+                _cb_item = _cb_model.item(_i)
+                _cb_item.setEnabled(_has_pactor)
+                if not _has_pactor:
+                    _cb_item.setToolTip(
+                        "PACTOR nicht verf\u00fcgbar \u2014 "
+                        "diese TNC-Firmware hat keine PACTOR-Option"
+                    )
+                else:
+                    _cb_item.setToolTip("")
+                break
+
+        # Disable Parameters → PACTOR... menu entry
+        if self._act_params_pactor is not None:
+            self._act_params_pactor.setEnabled(_has_pactor)
+            if not _has_pactor:
+                self._act_params_pactor.setToolTip(
+                    "PACTOR nicht verf\u00fcgbar \u2014 "
+                    "diese TNC-Firmware hat keine PACTOR-Option"
+                )
+                self._log_monitor(
+                    "[SYS] TNC has no PACTOR \u2014 "
+                    "PACTOR mode + Parameters menu disabled"
+                )
+            else:
+                self._act_params_pactor.setToolTip("")
 
         # Upload parameters unless Fast Initialization is selected.
         # Fast Init skips the parameter upload and goes directly to
@@ -903,6 +977,9 @@ class MainWindow(QMainWindow):
 
     def _on_host_mode_exit(self) -> None:
         if self._serial.is_connected:
+            # Signal _update_host_mode_ui that this is a genuine
+            # user-initiated exit — always show verbose terminal.
+            self._exiting_host_mode_by_user = True
             self._serial.exit_host_mode()
 
     def _on_recovery(self) -> None:
@@ -993,9 +1070,30 @@ class MainWindow(QMainWindow):
         if mode is None:
             return
 
+        from .screens.packet_screen import PacketBaseScreen
+        _is_packet = isinstance(
+            self._opmode_stack.currentWidget(), PacketBaseScreen
+        )
+        # When leaving packet mode: discard buffer and APRS state.
+        # Fresh start next time packet mode is entered.
+        if not _is_packet:
+            self._packet_raw_frames.clear()
+            self._packet_aprs_active = False
+
         # ARQ / general received data
         if hasattr(mode, "on_data_received"):
-            mode.on_data_received = self._on_mode_data_received
+            if _is_packet:
+                # Packet mode: callback receives (channel, data)
+                mode.on_data_received = self._on_packet_data_received
+            else:
+                mode.on_data_received = self._on_mode_data_received
+
+        # Monitored / unproto frames ($3F)
+        if hasattr(mode, "on_monitor_frame"):
+            if _is_packet:
+                mode.on_monitor_frame = self._on_packet_monitor_frame
+            else:
+                mode.on_monitor_frame = self._on_mode_data_received
 
         # PACTOR FEC / Unproto data ($3F) — same handler as ARQ data
         if hasattr(mode, "on_fec_received"):
@@ -1013,9 +1111,30 @@ class MainWindow(QMainWindow):
             else:
                 mode.on_link_message = self._on_mode_link_message
 
-        # DATA_ACK → colour TX green + show in RX
+        # DATA_ACK ($5F) — Packet: flow control; RTTY: colour tracking
         if hasattr(mode, 'on_data_ack'):
-            mode.on_data_ack = self._on_rtty_data_ack
+            if _is_packet:
+                mode.on_data_ack = self._on_packet_data_ack
+            else:
+                mode.on_data_ack = self._on_rtty_data_ack
+
+        # Packet TX: wire Enter key in tx_input to DATA frame send
+        if _is_packet:
+            screen = self._opmode_stack.currentWidget()
+            if hasattr(screen, 'tx_input'):
+                try:
+                    screen.tx_input.textChanged.disconnect(
+                        self._on_packet_tx_enter
+                    )
+                except (RuntimeError, TypeError):
+                    pass
+                # Use keyPressEvent override instead of textChanged
+                # — see _on_packet_tx_enter for the Enter detection
+                screen.tx_input._packet_send_slot = self._on_packet_tx_enter
+
+        # FAX: wire pixel data callback
+        if mode.name == "FAX" and hasattr(mode, 'on_data_received'):
+            mode.on_data_received = self._on_fax_data_received
 
         # Wire screen buttons (SEND, RECEIVE) to MainWindow slots
         self._wire_screen_buttons()
@@ -1029,7 +1148,11 @@ class MainWindow(QMainWindow):
         Maps TNC link-message text to the status keys used by
         AmtorScreen and PactorScreen.
         """
-        def handler(msg: str) -> None:
+        def handler(*args) -> None:
+            # Accept both 1-arg (msg) and 2-arg (channel, msg) calls.
+            # HFPacketMode calls on_link_message(ch, text); AMTOR/PACTOR
+            # call on_link_message(text).
+            msg = args[-1] if args else ""
             # 1. General log / monitor
             self._on_mode_link_message(msg)
             # 2. Update screen status label
@@ -1100,11 +1223,50 @@ class MainWindow(QMainWindow):
                 self._on_screen_rbaud_changed
             )
 
+        # Baudot: Switch figs (FIGS 0x1B) and Switch char (LTRS 0x1F)
+        # These inject Baudot shift-control bytes directly into TX stream.
+        for _btn_name, _byte in (
+            ("btn_figs",  "\x1b"),   # FIGS — switch to figures/digits
+            ("btn_chars", "\x1f"),   # LTRS — switch back to letters
+        ):
+            _btn = getattr(screen, _btn_name, None)
+            if _btn is not None:
+                try:
+                    _btn.clicked.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                _btn.clicked.connect(
+                    (lambda _b=_byte: lambda: self._on_rtty_char_ready(_b))()
+                )
+
+        # Baudot: Switch figs / Switch char — direct TNC send, not buffered.
+        # FIGS (0x1B) and LTRS (0x1F) are Baudot shift control bytes sent
+        # immediately to the TNC regardless of SEND/RECEIVE state.
+        for _btn_name, _byte in (
+            ("btn_figs",  b"\x1b"),   # FIGS — switch TNC to figures/digits
+            ("btn_chars", b"\x1f"),   # LTRS — switch TNC back to letters
+        ):
+            _btn = getattr(screen, _btn_name, None)
+            if _btn is not None:
+                try:
+                    _btn.clicked.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                _btn.clicked.connect(
+                    (lambda _b=_byte: lambda: (
+                        self._serial.send_data(_b, channel=0)
+                        if self._serial.is_connected
+                           and self._serial.is_host_mode
+                        else None
+                    ))()
+                )
+
         # Phase 3 — identity fields, spinboxes, toggles, NAVTEX filters
         self._wire_identity_fields(screen)
         self._wire_morse_params(screen)
         self._wire_toggle_buttons(screen)
         self._wire_navtex_filters(screen)
+        self._wire_fax_buttons(screen)
 
         # char_ready: legacy signal — kept for non-Baudot modes
         if hasattr(screen, "char_ready"):
@@ -1417,6 +1579,8 @@ class MainWindow(QMainWindow):
         if rx is not None:
             rx.clear()
         self._shared_rx_doc = None
+        self._packet_raw_frames: list[tuple[str, str]] = []
+        self._packet_aprs_active: bool = False
         self._log_monitor("[SYS] RX display cleared")
 
     def _on_rtty_data_ack(self) -> None:
@@ -1800,6 +1964,11 @@ class MainWindow(QMainWindow):
         # MailDrop button
         _rewire(screen.btn_maildrop.clicked, self._on_packet_maildrop)
 
+        # APRS decode toggle — VHFPacketScreen only (hidden in HFPacketScreen)
+        if hasattr(screen, "btn_aprs"):
+            _rewire(screen.btn_aprs.toggled, screen.on_aprs_toggled)
+            _rewire(screen.btn_aprs.toggled, self._on_packet_aprs_toggled)
+
         # MHEARD Refresh button
         _rewire(screen.mheard_panel.btn_refresh.clicked, self._on_packet_mheard)
 
@@ -1998,10 +2167,10 @@ class MainWindow(QMainWindow):
             screen.btn_connect.blockSignals(True)
             screen.btn_connect.setChecked(False)
             screen.btn_connect.blockSignals(False)
-            screen.on_connect_toggled(False)
+            screen.on_connect_toggled(False)   # public method on PacketBaseScreen
             return
         from pk232py.comm.frame import build_ch_cmd
-        frame = build_ch_cmd(0, b'CO', callsign.encode('ascii'))
+        frame = build_ch_cmd(1, b'CO', callsign.encode('ascii'))  # ch1 = AX.25 data channel
         self._serial.send_command(frame[2:4], frame[4:-1])
         self._log_monitor(f"[PACKET] Connecting \u2192 {callsign}")
 
@@ -2010,7 +2179,7 @@ class MainWindow(QMainWindow):
         if not self._serial.is_connected or not self._serial.is_host_mode:
             return
         from pk232py.comm.frame import build_ch_cmd
-        frame = build_ch_cmd(0, b'DI')
+        frame = build_ch_cmd(1, b'DI')
         self._serial.send_command(frame[2:4], frame[4:-1])
         self._log_monitor("[PACKET] Disconnect sent")
         screen = self._opmode_stack.currentWidget()
@@ -2020,7 +2189,7 @@ class MainWindow(QMainWindow):
             screen.btn_connect.blockSignals(True)
             screen.btn_connect.setChecked(False)
             screen.btn_connect.blockSignals(False)
-            screen.on_connect_toggled(False)
+            screen.on_connect_toggled(False)   # public method on PacketBaseScreen
 
     def _on_packet_unproto(self, checked: bool) -> None:
         """Unproto button toggled — set TNC UNPROTO path.
@@ -2418,12 +2587,19 @@ class MainWindow(QMainWindow):
             mode.navstn = filter_str
         self._log_monitor(f"[PARAM] NAVSTN → {filter_str}")
 
-    def _on_mode_data_received(self, data: bytes) -> None:
+    def _on_mode_data_received(self, ch_or_data, data=None) -> None:
         """Route decoded TNC data to the correct display widget.
+
+        Accepts both 1-arg (data) and 2-arg (channel, data) calls so
+        that this handler is safe regardless of which mode wires it.
+        Packet modes use _on_packet_data_received instead (see
+        _wire_mode_callbacks), but this keeps us crash-proof.
 
         Host Mode (stack index 0): active opmode screen's rx_display.
         Verbose Mode (stack index 1): verbose terminal _vt_display.
         """
+        if data is None:
+            data = ch_or_data   # 1-arg call: ch_or_data IS the data
         try:
             text = data.decode("ascii", errors="replace")
         except Exception:
@@ -2453,6 +2629,297 @@ class MainWindow(QMainWindow):
         if self._monitor_container.isVisible():
             if self._mon_btn_decoded.isChecked():
                 self._log_monitor(f"[ECHO] {text.rstrip()}")
+
+    # ------------------------------------------------------------------
+    # FAX handlers
+    # ------------------------------------------------------------------
+
+    def _wire_fax_buttons(self, screen) -> None:
+        """Wire FaxScreen parameter controls to TNC commands.
+
+        Skips silently for any screen that is not a FaxScreen.
+        Uses try/disconnect to avoid stacking on repeated calls.
+        """
+        if not hasattr(screen, 'combo_fspeed'):
+            return
+
+        def _rewire(signal, slot):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+            signal.connect(slot)
+
+        _rewire(screen.combo_fspeed.currentIndexChanged,
+                self._on_fax_fspeed_changed)
+        _rewire(screen.combo_aspect.currentIndexChanged,
+                self._on_fax_aspect_changed)
+        _rewire(screen.btn_faxneg.toggled,
+                self._on_fax_faxneg_toggled)
+        _rewire(screen.btn_rxrev.toggled,
+                self._on_fax_rxrev_toggled)
+
+    def _on_fax_data_received(self, data: bytes) -> None:
+        """Handle FAX pixel data ($3F RX_MONITOR frames).
+
+        Each call delivers one horizontal scan line as raw bytes
+        (grayscale 0=black, 255=white).  The data is forwarded to
+        FaxImageWidget.append_line() which renders it immediately.
+        """
+        screen = self._opmode_stack.currentWidget()
+        if not hasattr(screen, 'fax_image'):
+            return
+        screen.fax_image.append_line(data)
+        n = len(screen.fax_image._lines)
+        screen.lbl_lines.setText(f"Zeilen: {n}")
+        # Update status on first line and periodically
+        if n == 1 or n % 50 == 0:
+            screen._set_status("EMPFANG …", "#cc8800")
+        self._log_monitor(f"[FAX] line {n} ({len(data)} bytes)")
+
+    def _on_fax_fspeed_changed(self, index: int) -> None:
+        """FSPEED dropdown changed — send FS frame to TNC."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        screen = self._opmode_stack.currentWidget()
+        combo = getattr(screen, 'combo_fspeed', None)
+        if combo is None:
+            return
+        from pk232py.modes.fax import FSPEED_TABLE
+        _, rpm = FSPEED_TABLE[index]
+        from pk232py.modes.fax import FAXMode
+        frame = FAXMode.fspeed_frame(rpm)
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[FAX] FSPEED → {rpm} RPM")
+
+    def _on_fax_aspect_changed(self, index: int) -> None:
+        """ASPECT ComboBox changed — send AY frame + update display ratio.
+
+        *index* is the ComboBox index (0-3).
+        ASPECT_TABLE[index] gives (tnc_value, ioc, ratio, label).
+        """
+        from pk232py.ui.screens.fax_screen import ASPECT_TABLE
+        if index < 0 or index >= len(ASPECT_TABLE):
+            return
+        tnc_value, ioc, _ratio, _ = ASPECT_TABLE[index]
+
+        # ASPECT only affects TNC sampling — no display effect.
+        # Send AY frame to TNC.
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.modes.fax import FAXMode
+        frame = FAXMode.aspect_frame(tnc_value)
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(
+            f"[FAX] ASPECT {tnc_value} (IOC {ioc}, ~{2*ioc} px/line)"
+        )
+
+    def _on_fax_faxneg_toggled(self, checked: bool) -> None:
+        """FAXNEG button toggled — send FN frame + update image."""
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, 'fax_image'):
+            screen.fax_image.set_faxneg(checked)
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.modes.fax import FAXMode
+        frame = FAXMode.faxneg_frame(checked)
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[FAX] FAXNEG → {'ON' if checked else 'OFF'}")
+
+    def _on_fax_rxrev_toggled(self, checked: bool) -> None:
+        """RXREV button toggled — send RX frame to TNC.
+
+        RXREV inverts the entire received signal (including sync).
+        Different from FAXNEG which only inverts pixel values.
+        TNC mnemonic: RV (RXREV Y/N).
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'RV', b'Y' if checked else b'N')
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[FAX] RXREV → {'ON' if checked else 'OFF'}")
+
+    # ------------------------------------------------------------------
+    # Packet RX/TX handlers
+    # ------------------------------------------------------------------
+
+    def _on_packet_data_received(self, channel: int, data: bytes) -> None:
+        """Handle $3x — received AX.25 data on *channel*.
+
+        Displays the decoded text in the Packet screen's rx_display
+        in the standard RX blue colour.  A channel prefix is shown
+        when channel != 0 so multi-stream connections are readable.
+        """
+        try:
+            text = data.decode('ascii', errors='replace')
+        except Exception:
+            text = repr(data)
+
+        # Channel prefix for multi-stream (channel 0 = unproto/default)
+        prefix = f"[CH{channel}] " if channel not in (0, 1) else ""
+        self._log_terminal(prefix + text)
+        self._log_monitor(f"[PKT RX ch{channel}] {text.rstrip()}")
+
+    def _on_packet_monitor_frame(self, data: bytes) -> None:
+        """Handle $3F — monitored/unproto AX.25 frame.
+
+        Steps:
+          1. Decode bytes → text
+          2. Timestamp the frame (UTC HH:MM:SS)
+          3. Append (ts, raw_text) to _packet_raw_frames buffer
+             so we can re-render when APRS mode is toggled
+          4. Display: raw text (APRS off) or decoded (APRS on)
+        """
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+
+        try:
+            text = data.decode('ascii', errors='replace')
+        except Exception:
+            text = repr(data)
+        text = text.replace('\r', '').strip()
+
+        # Store raw frame in buffer (always — independent of display mode)
+        self._packet_raw_frames.append((ts, text))
+
+        # Display: route through decoder if APRS mode is active
+        screen = self._opmode_stack.currentWidget()
+        if self._packet_aprs_active:
+            from pk232py.modes.aprs_decoder import AprsDecoder
+            display_text = AprsDecoder.decode(text)
+        else:
+            display_text = text
+        self._packet_rx_append(screen, ts, display_text)
+        self._log_monitor(f"[MON] {text[:80]}")
+
+    def _packet_rx_append(
+            self, screen, ts: str, text: str,
+            color: str = "#aaaaaa") -> None:
+        """Append one timestamped frame to screen.rx_display.
+
+        All packet monitor output goes through here so the
+        formatting is always consistent.
+
+        Parameters
+        ----------
+        screen : QWidget  — the active opmode screen
+        ts     : str      — UTC timestamp string "HH:MM:SS"
+        text   : str      — the frame text (raw or decoded)
+        color  : str      — QColor hex string (default grey)
+        """
+        if not hasattr(screen, "rx_display"):
+            return
+        from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
+        cursor = screen.rx_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(color))
+        cursor.setCharFormat(fmt)
+        # Timestamp prefix on the first line only
+        lines = text.splitlines()
+        if lines:
+            cursor.insertText(f"[{ts}] {lines[0]}\n")
+            for line in lines[1:]:
+                cursor.insertText(f"         {line}\n")
+        cursor.insertText("\n")          # blank line between frames
+        screen.rx_display.setTextCursor(cursor)
+        screen.rx_display.ensureCursorVisible()
+
+    def _packet_rx_redraw(self, screen) -> None:
+        """Re-render the entire _packet_raw_frames buffer.
+
+        Called when the APRS toggle changes so the user sees
+        all frames in the new mode (raw ↔ decoded).
+        The RX display is cleared first, then all buffered
+        frames are written again — either raw or decoded.
+        """
+        if not hasattr(screen, "rx_display"):
+            return
+        screen.rx_display.clear()
+        if self._packet_aprs_active:
+            from pk232py.modes.aprs_decoder import AprsDecoder
+        for ts, raw_text in self._packet_raw_frames:
+            if self._packet_aprs_active:
+                display_text = AprsDecoder.decode(raw_text)
+            else:
+                display_text = raw_text
+            self._packet_rx_append(screen, ts, display_text)
+
+    def _on_packet_aprs_toggled(self, checked: bool) -> None:
+        """APRS decode button toggled.
+
+        checked=True:  switch to APRS decoded display.
+                       All frames in the buffer are decoded
+                       and the RX window is redrawn.
+        checked=False: switch back to raw display.
+                       Buffer is re-rendered as original text.
+
+        The visual button style is handled by
+        PacketBaseScreen.on_aprs_toggled() which is also
+        connected to btn_aprs.toggled.
+        """
+        self._packet_aprs_active = checked
+        screen = self._opmode_stack.currentWidget()
+        self._packet_rx_redraw(screen)
+        state = "ON" if checked else "OFF"
+        self._log_monitor(f"[APRS] decode mode {state}")
+
+    def _on_packet_data_ack(self, channel: int = 0) -> None:
+        """Handle $5F DATA_ACK for Packet mode.
+
+        For Packet, DATA_ACK signals that the TNC has accepted the
+        last data block.  No colour tracking needed — just log it.
+        Flow control (waiting for ACK before next send) is handled
+        by the TNC itself in Host Mode; we just confirm receipt.
+        """
+        self._log_monitor(f"[PKT ACK ch{channel}]")
+
+    def _on_packet_tx_enter(self) -> None:
+        """Send the TX window content as an AX.25 DATA frame.
+
+        Called when the user presses Enter in the Packet screen's
+        tx_input.  Grabs the complete text, sends it as build_data()
+        on channel 1, then clears the TX window.
+
+        Only fires when connected (btn_connect is checked) or in
+        unproto mode (btn_unproto is checked).
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        screen = self._opmode_stack.currentWidget()
+        if screen is None or not hasattr(screen, 'tx_input'):
+            return
+
+        # Only send when connected or in unproto mode
+        connected = (hasattr(screen, 'btn_connect')
+                     and screen.btn_connect.isChecked())
+        unproto   = (hasattr(screen, 'btn_unproto')
+                     and screen.btn_unproto.isChecked())
+        if not connected and not unproto:
+            return
+
+        text = screen.tx_input.toPlainText()
+        if not text.strip():
+            return
+
+        data = (text + '\r').encode('ascii', errors='replace')
+        self._serial.send_data(data, channel=1)
+        self._log_monitor(f"[PKT TX] {text.rstrip()!r}")
+
+        # Echo in RX display (TX yellow) — will be confirmed by DATA_ACK
+        from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
+        cursor = screen.rx_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor('#ffee88'))  # TX yellow
+        cursor.setCharFormat(fmt)
+        cursor.insertText(f'> {text.rstrip()}\n')
+        screen.rx_display.setTextCursor(cursor)
+        screen.rx_display.ensureCursorVisible()
+
+        # Clear TX window
+        screen.tx_input.clear()
 
     def _on_mode_link_message(self, msg: str) -> None:
         """Display link state messages in RX panel."""
@@ -2901,18 +3368,25 @@ class MainWindow(QMainWindow):
         else:
             self._sb_mode.setText("Mode: VERBOSE")
             self._set_mode_indicator("verbose")
-            # Keep the opmode screen (index 0) when a mode switch
-            # temporarily exits Host Mode for verbose activation
-            # (e.g. PACTOR uses verbose_command).  Only switch to
-            # the Verbose terminal view (index 1) when no opmode
-            # screen is active — i.e. a genuine disconnect / error.
-            active_name = self._modes.current_mode_name
-            mode_has_screen = (
-                active_name is not None
-                and active_name in self._opmode_screens
-            )
-            if not mode_has_screen:
+            if self._exiting_host_mode_by_user:
+                # Genuine user exit: always show verbose terminal
+                # and deactivate the current mode so the next
+                # Host Mode entry starts clean.
+                self._exiting_host_mode_by_user = False
+                if self._modes.current_mode is not None:
+                    self._modes.current_mode.deactivate()
+                    self._modes._active_mode = None
                 self._stack.setCurrentIndex(1)
+            else:
+                # Temporary exit (e.g. PACTOR verbose activation):
+                # keep the opmode screen visible if one is active.
+                active_name = self._modes.current_mode_name
+                mode_has_screen = (
+                    active_name is not None
+                    and active_name in self._opmode_screens
+                )
+                if not mode_has_screen:
+                    self._stack.setCurrentIndex(1)
         self._set_sig(self._ssl_host, active)
         if active:
             self._opmode_timer.start()
