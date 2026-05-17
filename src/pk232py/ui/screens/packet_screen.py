@@ -108,6 +108,22 @@ _STYLE_UNPROTO_ON = (
     "  font-weight: bold; padding: 4px 8px;"
     "}"
 )
+# APRS decode toggle — amber/orange when active
+_STYLE_APRS_OFF = (
+    "QPushButton {"
+    "  background-color: #445566; color: white;"
+    "  border: 1px solid #334455; border-radius: 4px;"
+    "  font-weight: bold; padding: 4px 8px;"
+    "}"
+    "QPushButton:hover { background-color: #556677; }"
+)
+_STYLE_APRS_ON = (
+    "QPushButton {"
+    "  background-color: #b06000; color: white;"
+    "  border: 2px solid #804000; border-radius: 4px;"
+    "  font-weight: bold; padding: 4px 8px;"
+    "}"
+)
 
 
 def _no_focus_btn(text: str, width: int = BTN_W) -> QPushButton:
@@ -279,7 +295,10 @@ class PacketBaseScreen(QWidget):
             parent=self,
         )
 
-        # No screen-level EventFilter: MainWindow handles TX routing.
+        # Intercept Enter in tx_input → send as AX.25 DATA frame.
+        # _packet_send_slot is set by MainWindow._wire_mode_callbacks().
+        self.tx_input._packet_send_slot = None
+        self.tx_input.installEventFilter(self)
         QTimer.singleShot(0, lambda: self.tx_input.setFocus())
 
     # ------------------------------------------------------------------
@@ -287,6 +306,15 @@ class PacketBaseScreen(QWidget):
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event) -> bool:
+        # Enter / Return in tx_input → send as AX.25 DATA frame
+        if (event.type() == QEvent.Type.KeyPress
+                and obj is getattr(self, 'tx_input', None)):
+            from PyQt6.QtCore import Qt as _Qt
+            if event.key() in (_Qt.Key.Key_Return, _Qt.Key.Key_Enter):
+                slot = getattr(self.tx_input, '_packet_send_slot', None)
+                if slot is not None:
+                    slot()
+                return True   # consume — do not insert newline
         if event.type() == QEvent.Type.KeyPress:
             # Walk parent chain: in an app-wide filter obj may be an
             # internal child widget, not the QLineEdit/QTextEdit itself.
@@ -440,6 +468,21 @@ class PacketBaseScreen(QWidget):
             "Only available when not connected."
         )
         action_row.addWidget(self.btn_maildrop)
+
+        # APRS decode toggle — visible only in VHFPacketScreen.
+        # getattr safe default: base class has no APRS_CAPABLE;
+        # VHFPacketScreen sets it True.
+        self.btn_aprs = _no_focus_btn("APRS", BTN_W)
+        self.btn_aprs.setCheckable(True)
+        self.btn_aprs.setStyleSheet(_STYLE_APRS_OFF)
+        self.btn_aprs.setToolTip(
+            "APRS decode mode.\n"
+            "ON: all monitored frames (including already received)\n"
+            "    are decoded into human-readable APRS format.\n"
+            "OFF: restores the original raw monitor display."
+        )
+        action_row.addWidget(self.btn_aprs)
+        self.btn_aprs.setVisible(getattr(self, "APRS_CAPABLE", False))
 
         action_row.addStretch()
 
@@ -608,6 +651,17 @@ class PacketBaseScreen(QWidget):
             self.btn_unproto.setStyleSheet(_STYLE_UNPROTO_OFF)
             self._set_status("STBY")
 
+    def on_aprs_toggled(self, checked: bool) -> None:
+        """Visual feedback for APRS decode toggle.
+
+        Only updates the button appearance — the actual re-decode
+        of the RX buffer is handled by MainWindow._on_packet_aprs_toggled().
+        """
+        if checked:
+            self.btn_aprs.setStyleSheet(_STYLE_APRS_ON)
+        else:
+            self.btn_aprs.setStyleSheet(_STYLE_APRS_OFF)
+
     # ------------------------------------------------------------------
     # Slot: Edit Macros
     # ------------------------------------------------------------------
@@ -653,3 +707,4 @@ class VHFPacketScreen(PacketBaseScreen):
     HBAUD_VALUES    = ["1200", "9600"]
     HBAUD_DEFAULT   = "1200"
     MONITOR_DEFAULT = "4"
+    APRS_CAPABLE    = True   # enables APRS decode button

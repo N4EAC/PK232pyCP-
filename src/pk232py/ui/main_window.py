@@ -2787,14 +2787,15 @@ class MainWindow(QMainWindow):
         screen = self._opmode_stack.currentWidget()
         if self._packet_aprs_active:
             from pk232py.modes.aprs_decoder import AprsDecoder
-            display_text = AprsDecoder.decode(text)
+            display_text = AprsDecoder.decode_html(text, ts)
+            self._packet_rx_append(screen, ts, display_text, is_html=True)
         else:
-            display_text = text
-        self._packet_rx_append(screen, ts, display_text)
+            self._packet_rx_append(screen, ts, text, is_html=False)
         self._log_monitor(f"[MON] {text[:80]}")
 
     def _packet_rx_append(
             self, screen, ts: str, text: str,
+            is_html: bool = False,
             color: str = "#aaaaaa") -> None:
         """Append one timestamped frame to screen.rx_display.
 
@@ -2803,26 +2804,34 @@ class MainWindow(QMainWindow):
 
         Parameters
         ----------
-        screen : QWidget  — the active opmode screen
-        ts     : str      — UTC timestamp string "HH:MM:SS"
-        text   : str      — the frame text (raw or decoded)
-        color  : str      — QColor hex string (default grey)
+        screen  : QWidget — the active opmode screen
+        ts      : str     — UTC timestamp string "HH:MM:SS"
+        text    : str     — frame text (raw) or HTML (decoded)
+        is_html : bool    — if True, render text via insertHtml
+        color   : str     — QColor hex string (default grey)
         """
         if not hasattr(screen, "rx_display"):
             return
         from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
         cursor = screen.rx_display.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
-        fmt = QTextCharFormat()
-        fmt.setForeground(QColor(color))
-        cursor.setCharFormat(fmt)
-        # Timestamp prefix on the first line only
-        lines = text.splitlines()
-        if lines:
-            cursor.insertText(f"[{ts}] {lines[0]}\n")
-            for line in lines[1:]:
-                cursor.insertText(f"         {line}\n")
-        cursor.insertText("\n")          # blank line between frames
+        if is_html:
+            cursor.insertHtml(text)
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#111111"))
+            cursor.setCharFormat(fmt)
+            cursor.insertText("\n")
+        else:
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color))
+            cursor.setCharFormat(fmt)
+            # Timestamp prefix on the first line only
+            lines = text.splitlines()
+            if lines:
+                cursor.insertText(f"[{ts}] {lines[0]}\n")
+                for line in lines[1:]:
+                    cursor.insertText(f"         {line}\n")
+            cursor.insertText("\n")      # blank line between frames
         screen.rx_display.setTextCursor(cursor)
         screen.rx_display.ensureCursorVisible()
 
@@ -2841,10 +2850,10 @@ class MainWindow(QMainWindow):
             from pk232py.modes.aprs_decoder import AprsDecoder
         for ts, raw_text in self._packet_raw_frames:
             if self._packet_aprs_active:
-                display_text = AprsDecoder.decode(raw_text)
+                display_text = AprsDecoder.decode_html(raw_text, ts)
+                self._packet_rx_append(screen, ts, display_text, is_html=True)
             else:
-                display_text = raw_text
-            self._packet_rx_append(screen, ts, display_text)
+                self._packet_rx_append(screen, ts, raw_text, is_html=False)
 
     def _on_packet_aprs_toggled(self, checked: bool) -> None:
         """APRS decode button toggled.
