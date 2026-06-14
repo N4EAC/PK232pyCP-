@@ -45,7 +45,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication, QWidget,
@@ -269,6 +269,11 @@ class PacketBaseScreen(QWidget):
     HBAUD_VALUES    = ["300", "1200"]
     HBAUD_DEFAULT   = "300"
     MONITOR_DEFAULT = "4"
+
+    # Signals connected automatically by MainWindow._wire_mode_callbacks().
+    # Declared on the base class → HF and VHF Packet inherit them.
+    clear_tx_req = pyqtSignal()
+    clear_rx_req = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -599,6 +604,16 @@ class PacketBaseScreen(QWidget):
             macro_row.addWidget(btn)
             self.macro_buttons.append(btn)
         macro_row.addStretch()
+
+        # Clear TX / Clear RX — emit signals handled by MainWindow.
+        self.btn_clear_tx = _no_focus_btn("Clear TX", BTN_W)
+        self.btn_clear_tx.clicked.connect(self.clear_tx_req.emit)
+        macro_row.addWidget(self.btn_clear_tx)
+
+        self.btn_clear_rx = _no_focus_btn("Clear RX", BTN_W)
+        self.btn_clear_rx.clicked.connect(self.clear_rx_req.emit)
+        macro_row.addWidget(self.btn_clear_rx)
+
         self.btn_edit_macros = _no_focus_btn("Edit Macros", BTN_W + 20)
         self.btn_edit_macros.setStyleSheet(
             "QPushButton { border: 1px solid #666; border-radius: 4px; padding: 4px; }"
