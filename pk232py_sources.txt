@@ -1,8 +1,8 @@
 # =============================================================================
 # PK232PY - Python source export for Claude project knowledge
-# Generated : 2026-05-06 18:45:08 UTC+0
+# Generated : 2026-06-14 22:30:42 UTC+0
 # Repo root : E:\PK232\pk232py_repo
-# Branch    : main  (8c8590e)
+# Branch    : main  (c5e26f3)
 # =============================================================================
 #
 # Structure:
@@ -19,6 +19,7 @@
 #     macros/              Macro system
 #     maildrop/            MailDrop (TNC mail box)
 #     tests/               Unit tests
+#   tools/                 Standalone tools (FAX WAV generator/decoder, etc.)
 #
 # Each file is preceded by a separator line:
 #   # === <relative path> ===
@@ -2923,7 +2924,13 @@ class ParamsUploader:
         Returns:
             Number of commands sent.
         """
-        commands = self._build_commands()
+        has_pactor = getattr(self._serial, 'has_pactor', True)
+        if not has_pactor:
+            logger.info(
+                "ParamsUploader: TNC has no PACTOR — "
+                "skipping PACTOR-specific commands"
+            )
+        commands = self._build_commands(has_pactor=has_pactor)
         logger.info("ParamsUploader: uploading %d commands", len(commands))
         sent = 0
         for cmd in commands:
@@ -2940,7 +2947,7 @@ class ParamsUploader:
         logger.info("ParamsUploader: upload complete (%d commands)", sent)
         return sent
 
-    def _build_commands(self) -> list[bytes]:
+    def _build_commands(self, has_pactor: bool = True) -> list[bytes]:
         """Build the full list of verbose-mode parameter commands."""
         cmds: list[bytes] = []
         cmds.append(self._cmd("EXPERT", "ON"))  # enable expert params
@@ -2952,9 +2959,7 @@ class ParamsUploader:
         # Ã¢â€â‚¬Ã¢â€â‚¬ Identity Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         if hf.mycall and hf.mycall != "NOCALL":
             cmds.append(self._cmd("MYCALL", hf.mycall.upper()))
-
-        if pt.myptcall and pt.myptcall != "NOCALL":
-            cmds.append(self._cmd("MYPTCALL", pt.myptcall.upper()))
+        # MYPTCALL is PACTOR-only — sent inside the has_pactor block below
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ HF Packet Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         cmds += [
@@ -2994,12 +2999,27 @@ class ParamsUploader:
             cmds.append(self._cmd("CTEXT",   hf.ctext))
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ PACTOR Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-        cmds += [
-            # PACTOR parameters available in verbose mode
-            self._bool("PTHUFF",  pt.pthuff),   # Huffman compression ON/OFF
-            self._bool("PT200",   pt.pt200),    # auto speed selection ON/OFF
-            self._cmd("PTOVER",  f"${pt.ptover:02X}"),  # changeover char
-        ]
+        # PACTOR commands: only send when TNC has the PACTOR option.
+        # On a PK-232MBX without PACTOR, these return ?What? errors.
+        if has_pactor:
+            # PACTOR callsign
+            if pt.myptcall and pt.myptcall != "NOCALL":
+                cmds.append(self._cmd("MYPTCALL", pt.myptcall.upper()))
+            # PACTOR parameters
+            cmds += [
+                self._bool("PTHUFF",  pt.pthuff),
+                self._bool("PT200",   pt.pt200),
+                self._cmd("PTOVER",  f"${pt.ptover:02X}"),
+            ]
+            # AMTOR: ARQTOL only on PACTOR firmware
+            cmds.append(self._cmd("ARQTOL",  str(self._config.amtor.arqtol)))
+            # Baudot/CW: MOPT only on PACTOR firmware
+            cmds.append(self._bool("MOPT", self._config.baudot.mopt))
+        else:
+            logger.debug(
+                "Skipping PACTOR-only commands "
+                "(MYPTCALL, ARQTOL, MOPT) — TNC has no PACTOR option"
+            )
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ AMTOR / NAVTEX / TDM Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         am = self._config.amtor
@@ -3011,7 +3031,7 @@ class ParamsUploader:
             cmds.append(self._cmd("MYIDENT", am.myident.upper()))
         cmds += [
             self._cmd("ARQTMO",  str(am.arqtmo)),
-            self._cmd("ARQTOL",  str(am.arqtol)),
+            # ARQTOL: PACTOR firmware only — sent in has_pactor block below
             self._cmd("ADELAY",  str(am.adelay)),
             self._cmd("TDBAUD",  str(am.tdbaud)),
             self._cmd("TDCHAN",  str(am.tdchan)),
@@ -3029,7 +3049,7 @@ class ParamsUploader:
             self._cmd("CODE",    str(ba.code)),
             self._bool("ALFRTTY", ba.alfrtty),
             self._bool("DIDDLE",  ba.diddle),
-            self._bool("MOPT",    ba.mopt),
+            # MOPT (Morse Option): PACTOR firmware only — sent below
             self._bool("RXREV",   ba.rxrev),
             self._bool("TXREV",   ba.txrev),
         ]
@@ -3073,7 +3093,10 @@ class ParamsUploader:
 
 
         # Restore expert mode to default
-        cmds.append(self._cmd("EXPERT", "OFF"))
+        # EXPERT OFF only for PACTOR-capable firmware
+        # (non-PACTOR variants don't support EXPERT command)
+        if has_pactor:
+            cmds.append(self._cmd("EXPERT", "OFF"))
 
         return cmds
 
@@ -3577,10 +3600,36 @@ class SerialManager(QObject):
         self._poll_thread      = None
         self._worker           = None  # _HostModeWorker in Host Mode
         self._write_lock       = threading.Lock()
+        # TNC boot banner — captured during init for capability detection
+        self._tnc_banner: bytes = b""
         # Shared buffer: ReaderThread writes here, _read_raw_until reads here
         self._rx_buf           = bytearray()
         self._rx_buf_lock      = threading.Lock()
         self._rx_buf_event     = threading.Event()
+
+    # ------------------------------------------------------------------
+    # TNC capability detection
+    # ------------------------------------------------------------------
+
+    @property
+    def has_pactor(self) -> bool:
+        """True if the TNC boot banner contains 'PACTOR'.
+
+        The PK-232MBX comes in two variants — with and without the
+        PACTOR hardware/firmware option.  The boot banner reliably
+        identifies which variant is connected.
+
+        Returns True (permissive default) when no banner was captured,
+        e.g. when the TNC was already in Host Mode at connect time.
+        """
+        if not self._tnc_banner:
+            return True   # no banner captured — assume PACTOR capable
+        return b"PACTOR" in self._tnc_banner
+
+    @property
+    def tnc_banner(self) -> str:
+        """TNC boot banner as a decoded string (for logging/display)."""
+        return self._tnc_banner.decode('ascii', errors='replace').strip()
 
     # ------------------------------------------------------------------
     # Port management
@@ -3757,6 +3806,16 @@ class SerialManager(QObject):
 
             if not resp:
                 raise RuntimeError("TNC did not respond — check port and baud")
+
+            # Store banner for capability detection (has_pactor property).
+            # Only store when known banner markers are present.
+            if any(m in resp for m in _BANNER_MARKERS):
+                self._tnc_banner = resp
+                logger.info(
+                    "TNC banner captured: PACTOR=%s (%d bytes)",
+                    b"PACTOR" in resp,
+                    len(resp),
+                )
 
             if _SOH_BYTE in resp:
                 logger.info("TNC already in Host Mode")
@@ -4135,23 +4194,49 @@ class SerialManager(QObject):
         if not self._write_raw(data):
             return False
         import time as _t
-        local_buf = bytearray()
-        deadline = _t.monotonic() + timeout
-        _t.sleep(0.05)  # give TNC time to start responding
+
+        # Idle-detection: wait until the TNC stops sending data
+        # for _IDLE_S seconds after the 'cmd:' prompt appears.
+        # Simply returning on 'cmd:' causes the next command to
+        # interleave with the TNC's still-running response output.
+        _IDLE_S = 0.12   # 120 ms idle = TNC has finished writing
+
+        local_buf    = bytearray()
+        deadline     = _t.monotonic() + timeout
+        prompt_seen  = False
+        idle_since   = None
+
+        _t.sleep(0.05)   # give TNC time to start responding
+
         while _t.monotonic() < deadline:
             with self._rx_buf_lock:
                 chunk = bytes(self._rx_buf)
                 self._rx_buf.clear()
             self._rx_buf_event.clear()
+
             if chunk:
                 local_buf.extend(chunk)
-                if b'\ncmd:' in local_buf or local_buf.startswith(b'cmd:'):
-                    return True
+                idle_since = None   # new data → reset idle timer
+                if not prompt_seen:
+                    if (b'\ncmd:' in local_buf
+                            or local_buf.startswith(b'cmd:')):
+                        prompt_seen = True
+                        idle_since  = _t.monotonic()
+            else:
+                # No new data — advance idle timer
+                if prompt_seen:
+                    if idle_since is None:
+                        idle_since = _t.monotonic()
+                    elif _t.monotonic() - idle_since >= _IDLE_S:
+                        return True   # prompt + idle → TNC ready
+
             remaining = deadline - _t.monotonic()
             if remaining <= 0:
                 break
-            self._rx_buf_event.wait(timeout=min(0.1, remaining))
-        return False
+            self._rx_buf_event.wait(timeout=min(0.05, remaining))
+
+        # Timeout: return True if prompt was at least seen
+        return prompt_seen
 
     def _read_raw_until(self, markers: tuple, timeout: float) -> bytes:
         """Wait for marker in shared rx buffer (filled by ReaderThread).
@@ -5896,6 +5981,759 @@ class AMTORFECMode(AMTORMode):
         from .amtor import AMTORMode
         return self.selfec_frame()
 
+# === src/pk232py/modes/aprs_decoder.py ===
+"""
+aprs_decoder.py — APRS payload decoder for PK232PY  (v3)
+
+New in v3:
+  decode_html(raw_text, timestamp) — returns QTextEdit-compatible HTML
+  with colour-coded cards per APRS frame type.
+
+Card colours (all on near-black #0d0d0d background):
+  Mic-E     orange  #FF9422
+  Position  blue    #44BBFF
+  Weather   green   #44FF88
+  Telemetry yellow  #FFD700
+  Message   pink    #FF55CC
+  3rd-party light-grey #CCCCCC
+
+The QTextEdit HTML renderer supports a subset of HTML4 + limited CSS.
+Rules observed here:
+  · bgcolor="..." on <td>  (not style="background-color:...")
+  · <font color="...">     for text colour
+  · <b>, <small>           for weight / size
+  · <br>                   for line breaks inside cells
+  · <span style="...">     ONLY for background-colour on chip badges
+  · No border-radius, no CSS variables, no padding shorthand on <td>
+"""
+
+from __future__ import annotations
+import re
+from dataclasses import dataclass
+import html as _html_mod
+
+
+# ---------------------------------------------------------------------------
+# Data container
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DecodedFrame:
+    source:      str = ""
+    path:        str = ""
+    aprs_id:     str = ""
+    type_str:    str = ""
+    info:        str = ""
+    raw_payload: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Colour / icon tables
+# ---------------------------------------------------------------------------
+
+# Per message type: header bg, body bg, accent colour, comment colour
+_HTML_COLORS: dict[str, dict] = {
+    'Mic-E':         {'hdr': '#1e0d00', 'bdy': '#130900', 'acc': '#FF9422', 'cmt': '#CC8844', 'aid': '#FF9422'},
+    'Position':      {'hdr': '#000f20', 'bdy': '#00080f', 'acc': '#44BBFF', 'cmt': '#6699BB', 'aid': '#44BBFF'},
+    'Position+Time': {'hdr': '#000f20', 'bdy': '#00080f', 'acc': '#44BBFF', 'cmt': '#6699BB', 'aid': '#44BBFF'},
+    'Weather':       {'hdr': '#000f05', 'bdy': '#00080a', 'acc': '#44FF88', 'cmt': '#55BB77', 'aid': '#44FF88'},
+    'Telemetry':     {'hdr': '#1a1200', 'bdy': '#110c00', 'acc': '#FFD700', 'cmt': '#AA9900', 'aid': '#FFD700'},
+    'Message':       {'hdr': '#1a0011', 'bdy': '#110009', 'acc': '#FF55CC', 'cmt': '#BB66AA', 'aid': '#FF55CC'},
+    'Status':        {'hdr': '#001a00', 'bdy': '#000f00', 'acc': '#88FF44', 'cmt': '#559933', 'aid': '#88FF44'},
+    'Third-party':   {'hdr': '#161616', 'bdy': '#0e0e0e', 'acc': '#CCCCCC', 'cmt': '#999999', 'aid': '#AAAAAA'},
+    'Item':          {'hdr': '#000f20', 'bdy': '#00080f', 'acc': '#44BBFF', 'cmt': '#6699BB', 'aid': '#44BBFF'},
+    'Object':        {'hdr': '#000f20', 'bdy': '#00080f', 'acc': '#44BBFF', 'cmt': '#6699BB', 'aid': '#44BBFF'},
+}
+# Fallback for unknown / telem-sub types
+_HTML_COLORS_DEFAULT = {'hdr': '#1a0011', 'bdy': '#110009', 'acc': '#FF55CC', 'cmt': '#BB66AA', 'aid': '#FF55CC'}
+
+# Emoji icon per type
+_TYPE_ICONS: dict[str, str] = {
+    'Mic-E':         '🚐',
+    'Position':      '📡',
+    'Position+Time': '📡',
+    'Weather':       '🌦',
+    'Telemetry':     '📊',
+    'Message':       '📨',
+    'Telem-Param':   '📨',
+    'Telem-Unit':    '📨',
+    'Telem-Bits':    '📨',
+    'Telem-Eqns':    '📨',
+    'Third-party':   '🌐',
+    'Status':        '📢',
+    'Item':          '📍',
+    'Object':        '📍',
+    'Unknown':       '❓',
+}
+
+# Map telem sub-types to their parent colour scheme
+_TELEM_TYPES = {'Telem-Param', 'Telem-Unit', 'Telem-Bits', 'Telem-Eqns'}
+_MSG_TYPES    = {'Message'} | _TELEM_TYPES
+
+
+# ---------------------------------------------------------------------------
+# Main decoder class
+# ---------------------------------------------------------------------------
+
+class AprsDecoder:
+
+    # ------------------------------------------------------------------ #
+    # Public API — plain text (used by raw display fallback)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def decode(raw_text: str) -> str:
+        """Decode to plain text.  Falls back to original on error."""
+        try:
+            frame = AprsDecoder._parse(raw_text)
+            return AprsDecoder._format_plain(frame)
+        except Exception:
+            return raw_text.strip()
+
+    # ------------------------------------------------------------------ #
+    # Public API — HTML (used by APRS display mode)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def decode_html(raw_text: str, timestamp: str = '') -> str:
+        """Decode and return QTextEdit-compatible HTML card.
+
+        The card consists of two table rows:
+          row 1 (header):  timestamp · icon · callsign · path · APRS-ID
+          row 2 (body):    type-specific content
+
+        All text contrast verified on #0d0d0d background.
+        Uses bgcolor on <td>, <font color="...">, <b>, <small>, <br>.
+        No CSS variables, no border-radius, no padding shorthand on cells.
+        """
+        try:
+            frame = AprsDecoder._parse(raw_text)
+            return AprsDecoder._build_html_card(frame, timestamp)
+        except Exception:
+            ts = _e(timestamp)
+            raw = _e(raw_text.strip()[:120])
+            return (
+                f'<table width="100%" cellpadding="4" cellspacing="1">'
+                f'<tr><td bgcolor="#161616">'
+                f'<font color="#888"><small>[{ts}]&nbsp;</small></font>'
+                f'<font color="#AAAAAA">{raw}</font>'
+                f'</td></tr></table><p>&nbsp;</p>'
+            )
+
+    # ------------------------------------------------------------------ #
+    # HTML card builder
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _build_html_card(frame: 'DecodedFrame', ts: str) -> str:
+        """Assemble the two-row HTML table for one APRS frame."""
+
+        # Resolve colour scheme
+        base_type = frame.type_str
+        if base_type in _TELEM_TYPES:
+            base_type = 'Telemetry'
+        colors = _HTML_COLORS.get(base_type, _HTML_COLORS_DEFAULT)
+
+        hdr_bg  = colors['hdr']
+        bdy_bg  = colors['bdy']
+        acc     = colors['acc']
+        cmt_c   = colors['cmt']
+        aid_c   = colors['aid']
+        icon    = _TYPE_ICONS.get(frame.type_str, '❓')
+
+        # ── header row ────────────────────────────────────────── #
+        ts_html  = f'<font color="#888"><small>[{_e(ts)}]&nbsp;</small></font>' if ts else ''
+        call_html = f'<b><font color="{acc}">{_e(frame.source)}</font></b>'
+        path_html = ''
+        if frame.path:
+            path_html = f'&nbsp;<font color="#999"><small>›&nbsp;{_e(frame.path)}</small></font>'
+        aid_html = ''
+        if frame.aprs_id:
+            aid_html = f'&nbsp;<font color="{aid_c}"><small>[{_e(frame.aprs_id)}]</small></font>'
+
+        header_td = (
+            f'<td bgcolor="{hdr_bg}" style="padding:5px 10px;">'
+            f'{ts_html}{icon}&nbsp;{call_html}{path_html}{aid_html}'
+            f'</td>'
+        )
+
+        # ── body row — dispatch by type ───────────────────────── #
+        body_content = AprsDecoder._html_body(frame, acc, cmt_c)
+        body_td = (
+            f'<td bgcolor="{bdy_bg}" style="padding:4px 10px 8px 28px;">'
+            f'{body_content}'
+            f'</td>'
+        )
+
+        return (
+            f'<table width="100%" cellpadding="0" cellspacing="1">'
+            f'<tr>{header_td}</tr>'
+            f'<tr>{body_td}</tr>'
+            f'</table><p>&nbsp;</p>'
+        )
+
+    @staticmethod
+    def _html_body(frame: 'DecodedFrame', acc: str, cmt_c: str) -> str:
+        """Generate body HTML for the given frame type."""
+        t = frame.type_str
+        info = frame.info
+
+        # ── Mic-E ────────────────────────────────────────────── #
+        if t == 'Mic-E':
+            coords, comment = AprsDecoder._split_coords_comment(info)
+            result = f'<b><font color="{acc}">{_e(coords)}</font></b>'
+            if comment:
+                result += f'<br><font color="{cmt_c}"><small>{_e(comment)}</small></font>'
+            return result
+
+        # ── Position / Position+Time ──────────────────────────── #
+        if t in ('Position', 'Position+Time'):
+            return AprsDecoder._html_body_position(info, acc, cmt_c)
+
+        # ── Telemetry data ────────────────────────────────────── #
+        if t == 'Telemetry':
+            return AprsDecoder._html_body_telemetry(info, acc, cmt_c)
+
+        # ── Telemetry config messages ─────────────────────────── #
+        if t in _TELEM_TYPES:
+            chips = AprsDecoder._html_chips(
+                [('', info)], acc,
+                chip_bg='#1a0011', chip_fg='#FF88DD', chip_bd='#880055'
+            )
+            return chips
+
+        # ── Message ───────────────────────────────────────────── #
+        if t == 'Message':
+            return f'<font color="{acc}">{_e(info)}</font>'
+
+        # ── Status ────────────────────────────────────────────── #
+        if t == 'Status':
+            return f'<font color="{acc}">{_e(info)}</font>'
+
+        # ── Third-party ───────────────────────────────────────── #
+        if t == 'Third-party':
+            return (
+                f'<font color="#CCCCCC">{_e(info)}</font>'
+            )
+
+        # ── Item / Object ─────────────────────────────────────── #
+        if t in ('Item', 'Object'):
+            coords, comment = AprsDecoder._split_coords_comment(info)
+            result = f'<b><font color="{acc}">{_e(coords)}</font></b>'
+            if comment:
+                result += f'<br><font color="{cmt_c}"><small>{_e(comment)}</small></font>'
+            return result
+
+        # ── Fallback ──────────────────────────────────────────── #
+        return f'<font color="{acc}">{_e(info[:150])}</font>'
+
+    @staticmethod
+    def _html_body_position(info: str, acc: str, cmt_c: str) -> str:
+        """Render a position frame.  Detects WX symbol and adds weather chips."""
+        # Split into coords+symbol and comment
+        coords, comment = AprsDecoder._split_coords_comment(info)
+
+        # Extract symbol name from [WX], [Digi] etc.
+        sym_m  = re.search(r'\[([^\]]+)\]', coords)
+        symbol = sym_m.group(1) if sym_m else ''
+        plain_coords = re.sub(r'\s*\[[^\]]+\]', '', coords).strip()
+
+        is_wx = 'WX' in symbol.upper() or symbol.endswith('WX')
+
+        # Coordinates line
+        result = f'<b><font color="{acc}">{_e(plain_coords)}</font></b>'
+        if symbol:
+            result += f'&nbsp;<font color="{cmt_c}"><small>{_e(symbol)}</small></font>'
+
+        # WX chips
+        if is_wx and comment:
+            chips_data = AprsDecoder._parse_wx(comment)
+            if chips_data:
+                chip_html = AprsDecoder._html_chips(
+                    chips_data, acc,
+                    chip_bg='#001408', chip_fg='#88FFAA', chip_bd='#006628'
+                )
+                result += f'<br>{chip_html}'
+                # leftover comment after WX fields
+                leftover = AprsDecoder._wx_leftover(comment)
+                if leftover:
+                    result += f'<br><font color="{cmt_c}"><small>{_e(leftover)}</small></font>'
+                return result
+
+        # Non-WX comment
+        if comment:
+            result += f'<br><font color="{cmt_c}"><small>{_e(comment)}</small></font>'
+        return result
+
+    @staticmethod
+    def _html_body_telemetry(info: str, acc: str, cmt_c: str) -> str:
+        """Render Telemetry T# frame as seq + analog chips + digital."""
+        # info = "Seq=221  A1=155  A2=000  A3=100  A4=091  A5=000  D=00000000"
+        seq_m = re.search(r'Seq=(\S+)', info)
+        d_m   = re.search(r'D=(\S+)', info)
+        seq   = seq_m.group(1) if seq_m else '?'
+        digi  = d_m.group(1)   if d_m   else ''
+
+        analogs = re.findall(r'(A\d)=(\S+)', info)
+
+        seq_html = f'<font color="{cmt_c}"><small>Seq&nbsp;{_e(seq)}'
+        if digi:
+            seq_html += f'&nbsp;·&nbsp;D&nbsp;{_e(digi)}'
+        seq_html += '</small></font>'
+
+        if analogs:
+            chips = AprsDecoder._html_chips(
+                analogs, acc,
+                chip_bg='#1a1200', chip_fg='#FFE566', chip_bd='#776600'
+            )
+            return f'{seq_html}<br>{chips}'
+        return seq_html
+
+    # ------------------------------------------------------------------ #
+    # HTML helpers
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _html_chips(pairs: list[tuple[str, str]],
+                    acc: str,
+                    chip_bg: str, chip_fg: str, chip_bd: str) -> str:
+        """Render a list of (label, value) or ('', value) as inline chips.
+
+        Uses <span style="background-color:...; color:...; border:...">
+        which QTextEdit renders correctly for inline spans.
+        """
+        parts = []
+        for label, value in pairs:
+            text = f'{label}={value}' if label else value
+            parts.append(
+                f'<span style="background-color:{chip_bg}; color:{chip_fg};'
+                f' border:0.5px solid {chip_bd}; padding:1px 4px;">'
+                f'{_e(text)}'
+                f'</span>'
+            )
+        return '&nbsp;'.join(parts)
+
+    @staticmethod
+    def _split_coords_comment(info: str) -> tuple[str, str]:
+        """Split 'coords  —  comment' into (coords_part, comment_part)."""
+        parts = info.split('  —  ', 1)
+        return parts[0].strip(), (parts[1].strip() if len(parts) > 1 else '')
+
+    # ------------------------------------------------------------------ #
+    # Weather data parser
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _parse_wx(comment: str) -> list[tuple[str, str]]:
+        """Extract weather readings from an APRS WX comment string.
+        Returns list of (label, value) tuples for chip display.
+        Ignores any trailing firmware/station text.
+        """
+        result = []
+        s = comment
+
+        # Wind: DDD/SSS (degrees / speed mph)
+        m = re.match(r'^(\d{3})/(\d{3})', s)
+        if m:
+            spd = int(m.group(2))
+            result.append(('wind', f"{m.group(1)}°/{spd}mph"))
+            s = s[7:]
+
+        patterns = [
+            (r'g(\d+)',   'gust', lambda v: f"{int(v)}mph"),
+            (r't(-?\d+)', 'temp', lambda v: f"{int(v)}°F"),
+            (r'r(\d+)',   'rain1h', lambda v: f"{int(v)/100:.2f}in"),
+            (r'p(\d+)',   'rain24h', lambda v: f"{int(v)/100:.2f}in"),
+            (r'h(\d+)',   'hum',  lambda v: f"{int(v)}%"),
+            (r'b(\d+)',   'baro', lambda v: f"{int(v)/10:.1f}mb"),
+        ]
+        for pat, label, fmt in patterns:
+            m = re.search(pat, s)
+            if m:
+                try:
+                    result.append((label, fmt(m.group(1))))
+                except Exception:
+                    pass
+        return result
+
+    @staticmethod
+    def _wx_leftover(comment: str) -> str:
+        """Return the non-numeric station/firmware comment after WX data."""
+        # Strip known WX fields; remainder is firmware/station text
+        stripped = re.sub(
+            r'^\d{3}/\d{3}|g\d+|t-?\d+|r\d+|p\d+|P\d+|h\d+|b\d+|l\d+|L\d+|s\d+|e\d+|f\d+|x\d+',
+            '', comment
+        ).strip().lstrip('#').strip()
+        # Only return if it looks like readable text (letters)
+        if re.search(r'[A-Za-z]', stripped):
+            return stripped
+        return ''
+
+    # ------------------------------------------------------------------ #
+    # Parse pipeline (shared with plain-text decode)
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _parse(raw: str) -> DecodedFrame:
+        raw = raw.replace('\r', '').strip()
+        parts   = raw.split('\n', 1)
+        header  = parts[0].strip()
+        payload = parts[1].strip() if len(parts) > 1 else ''
+        source, path, aprs_id = AprsDecoder._parse_header(header)
+        type_str, info = AprsDecoder._decode_payload(payload, aprs_id)
+        return DecodedFrame(source=source, path=path, aprs_id=aprs_id,
+                            type_str=type_str, info=info, raw_payload=payload)
+
+    @staticmethod
+    def _parse_header(header: str) -> tuple[str, str, str]:
+        """Parse SOURCE>D1>...>APRS_ID <UI>: → (source, path, aprs_id)."""
+        header = header.rstrip(':').strip()
+        header = re.sub(r'\s*[<(]UI[)>].*$', '', header, flags=re.IGNORECASE)
+        parts  = [p.strip() for p in header.split('>') if p.strip()]
+        if not parts:
+            return header, '', ''
+        source  = parts[0]
+        aprs_id = parts[-1] if len(parts) > 1 else ''
+        via     = parts[1:-1] if len(parts) > 2 else []
+        path    = ' › '.join(via) if via else ''
+        return source, path, aprs_id
+
+    # ------------------------------------------------------------------ #
+    # Payload dispatcher
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _decode_payload(payload: str, aprs_id: str = '') -> tuple[str, str]:
+        """Route to the correct sub-decoder.  Returns (type_str, info)."""
+        if not payload:
+            return 'Empty', '(no payload)'
+
+        # Mic-E detected by APRS-ID, not first byte
+        if AprsDecoder._is_mice_destination(aprs_id):
+            p = payload[1:] if payload and payload[0] in ('`', "'") else payload
+            return 'Mic-E', AprsDecoder._decode_mice_full(p, aprs_id)
+
+        c = payload[0]
+        if c == '}':
+            return AprsDecoder._decode_third_party(payload[1:])
+        if c in ('!', '='):
+            return 'Position', AprsDecoder._pos_auto(payload[1:])
+        if c in ('@', '/'):
+            return 'Position+Time', AprsDecoder._pos_with_ts(payload[1:])
+        if c == '>':
+            return 'Status', payload[1:].strip()
+        if c == ':':
+            return AprsDecoder._decode_message(payload[1:])
+        if payload.startswith('T#'):
+            return 'Telemetry', AprsDecoder._decode_telemetry(payload)
+        if c == ')':
+            return 'Item', AprsDecoder._decode_item(payload[1:])
+        if c == ';':
+            name = payload[1:10].strip()
+            rest = payload[26:].strip() if len(payload) > 26 else ''
+            return 'Object', f'{name} — {rest}'
+        if c == '_':
+            return 'Weather', payload[1:].strip()
+        if c in ('`', "'"):
+            return 'Mic-E', AprsDecoder._decode_mice_full(payload[1:], aprs_id)
+        return 'Unknown', payload
+
+    # ------------------------------------------------------------------ #
+    # Mic-E
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _is_mice_destination(aprs_id: str) -> bool:
+        if not aprs_id:
+            return False
+        base = aprs_id.split('-')[0].upper()
+        if len(base) < 4:
+            return False
+        if base.startswith('AP'):
+            return False
+        return bool(re.match(r'^[A-Z0-9]{4,6}$', base))
+
+    @staticmethod
+    def _decode_mice_full(payload: str, aprs_id: str) -> str:
+        """Decode Mic-E: latitude from destination, longitude from info bytes."""
+        try:
+            dest = aprs_id.split('-')[0][:6].upper()
+            if len(dest) < 6:
+                return f"Mic-E (dest<6): {payload[:20]}"
+
+            def char_info(c: str) -> tuple[int, bool]:
+                if 'A' <= c <= 'J': return ord(c)-ord('A'), True
+                if 'P' <= c <= 'Y': return ord(c)-ord('P'), True
+                if '0' <= c <= '9': return ord(c)-ord('0'), False
+                return 0, True
+
+            chars  = [char_info(c) for c in dest]
+            digits = [ci[0] for ci in chars]
+            north  = [ci[1] for ci in chars]
+
+            lat_dec = (digits[0]*10 + digits[1]) + (
+                (digits[2]*10 + digits[3]) + (digits[4]*10 + digits[5]) / 100.0
+            ) / 60.0
+            lat_hemi = 'N' if north[3] else 'S'
+            if not north[3]:
+                lat_dec = -lat_dec
+
+            lon_east   = north[3]
+            lon_offset = 100 if ('P' <= dest[4] <= 'Y') else 0
+
+            if len(payload) < 3:
+                return f"{lat_dec:.4f}°{lat_hemi}  (lon unavailable)"
+
+            d_raw = ord(payload[0]) - 28
+            m_raw = ord(payload[1]) - 28
+            h_raw = ord(payload[2]) - 28
+
+            lon_deg_v = d_raw + lon_offset
+            lon_min_v = m_raw if m_raw < 60 else m_raw - 60
+            lon_hh_v  = max(0, h_raw)
+            lon_dec   = lon_deg_v + (lon_min_v + lon_hh_v / 100.0) / 60.0
+            lon_hemi  = 'E' if lon_east else 'W'
+            if not lon_east:
+                lon_dec = -lon_dec
+
+            comment = ''
+            if len(payload) > 7:
+                raw_cmt = payload[7:]
+                if '}' in raw_cmt:
+                    comment = raw_cmt[raw_cmt.index('}')+1:].strip()
+                else:
+                    comment = raw_cmt.lstrip('`\'"[]>=<^!#').strip()
+
+            result = f"{lat_dec:.4f}°{lat_hemi}  /  {lon_dec:.4f}°{lon_hemi}"
+            if comment:
+                result += f"  —  {comment}"
+            return result
+        except Exception as ex:
+            return f"Mic-E error ({ex}): {payload[:30]}"
+
+    # ------------------------------------------------------------------ #
+    # Position
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _pos_auto(data: str) -> str:
+        if not data:
+            return '(empty)'
+        if len(data) >= 9 and data[0] in ('/', '\\'):
+            lat_bytes = data[1:5]
+            if all(33 <= ord(c) <= 124 for c in lat_bytes):
+                return AprsDecoder._pos_compressed(data)
+        return AprsDecoder._pos_uncompressed(data)
+
+    @staticmethod
+    def _pos_uncompressed(data: str) -> str:
+        try:
+            lat_str = data[0:8]
+            sym_tbl = data[8]
+            lon_str = data[9:18]
+            sym_cod = data[18]
+            comment = data[19:].strip() if len(data) > 19 else ''
+            lat = AprsDecoder._lat(lat_str)
+            lon = AprsDecoder._lon(lon_str)
+            sym = AprsDecoder._symbol(sym_tbl, sym_cod)
+            result = f"{lat}  /  {lon}  [{sym}]"
+            if comment:
+                result += f"  —  {comment}"
+            return result
+        except Exception:
+            return data
+
+    @staticmethod
+    def _pos_compressed(data: str) -> str:
+        try:
+            sym_tbl = data[0]
+            y_chars = data[1:5]
+            x_chars = data[5:9]
+            sym_cod = data[9] if len(data) > 9 else ' '
+            comment = data[12:].strip() if len(data) > 12 else ''
+
+            def b91(chars: str) -> int:
+                val = 0
+                for c in chars:
+                    val = val * 91 + (ord(c) - 33)
+                return val
+
+            lat = 90.0  - b91(y_chars) / 380926.0
+            lon = -180.0 + b91(x_chars) / 190463.0
+            sym  = AprsDecoder._symbol(sym_tbl, sym_cod)
+            lat_s = f"{abs(lat):.4f}°{'N' if lat >= 0 else 'S'}"
+            lon_s = f"{abs(lon):.4f}°{'E' if lon >= 0 else 'W'}"
+            result = f"{lat_s}  /  {lon_s}  [{sym}]"
+            if comment:
+                result += f"  —  {comment}"
+            return result
+        except Exception:
+            return AprsDecoder._pos_uncompressed(data)
+
+    @staticmethod
+    def _pos_with_ts(data: str) -> str:
+        try:
+            ts_raw = data[0:7]
+            ts_str = AprsDecoder._timestamp(ts_raw)
+            rest   = data[7:]
+            pos    = AprsDecoder._pos_auto(rest)
+            return f"{ts_str}  {pos}"
+        except Exception:
+            return data
+
+    # ------------------------------------------------------------------ #
+    # Coordinate helpers
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _lat(s: str) -> str:
+        deg  = int(s[0:2]); mins = float(s[2:7]); hemi = s[7].upper()
+        dec  = deg + mins / 60.0
+        if hemi == 'S': dec = -dec
+        return f"{dec:.4f}°{hemi}"
+
+    @staticmethod
+    def _lon(s: str) -> str:
+        deg  = int(s[0:3]); mins = float(s[3:8]); hemi = s[8].upper()
+        dec  = deg + mins / 60.0
+        if hemi == 'W': dec = -dec
+        return f"{dec:.4f}°{hemi}"
+
+    @staticmethod
+    def _timestamp(ts: str) -> str:
+        if ts.endswith('z'): return f"UTC {ts[2:4]}:{ts[4:6]} (day {ts[0:2]})"
+        if ts.endswith('h'): return f"UTC {ts[0:2]}:{ts[2:4]}:{ts[4:6]}"
+        return ts
+
+    # ------------------------------------------------------------------ #
+    # Message / Telemetry config
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _decode_message(data: str) -> tuple[str, str]:
+        if len(data) < 10 or data[9] != ':':
+            return 'Message', data.strip()
+        addressee = data[0:9].strip()
+        body      = data[10:]
+        for prefix, label in (
+            ('PARM.', 'Telem-Param'),
+            ('UNIT.', 'Telem-Unit'),
+            ('EQNS.', 'Telem-Eqns'),
+        ):
+            if body.startswith(prefix):
+                return label, f'→ {addressee}: {body[len(prefix):]}'
+        if body.startswith('BITS.'):
+            bits  = body[5:13] if len(body) >= 13 else body[5:]
+            label = body[14:].strip() if len(body) > 14 else ''
+            return 'Telem-Bits', f'→ {addressee}: bits={bits}  {label}'
+        body_clean = re.sub(r'\{[0-9A-Za-z]+\}$', '', body).strip()
+        return 'Message', f'→ {addressee}: {body_clean}'
+
+    # ------------------------------------------------------------------ #
+    # Telemetry data
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _decode_telemetry(data: str) -> str:
+        try:
+            parts   = data[2:].split(',')
+            seq     = parts[0]
+            analog  = parts[1:6]
+            digital = parts[6] if len(parts) > 6 else ''
+            a_str   = '  '.join(f'A{i+1}={v}' for i, v in enumerate(analog))
+            return f'Seq={seq}  {a_str}  D={digital}'
+        except Exception:
+            return data
+
+    # ------------------------------------------------------------------ #
+    # Item
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _decode_item(data: str) -> str:
+        try:
+            m = re.match(r'^([^!_]{1,9})([!_])(.*)', data)
+            if not m:
+                return data
+            name  = m.group(1).strip()
+            state = '(live)' if m.group(2) == '!' else '(killed)'
+            pos   = AprsDecoder._pos_auto(m.group(3))
+            return f'{name} {state}  {pos}'
+        except Exception:
+            return data
+
+    # ------------------------------------------------------------------ #
+    # Third-party
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _decode_third_party(inner: str) -> tuple[str, str]:
+        try:
+            m = re.match(r'^([^>]+)>([^:]+):(.*)', inner, re.DOTALL)
+            if not m:
+                return 'Third-party', inner.strip()
+            inner_src     = m.group(1).strip()
+            inner_path    = m.group(2).strip()
+            inner_payload = m.group(3).strip()
+            _, inner_info = AprsDecoder._decode_payload(inner_payload)
+            gateway = inner_path.split(',')[0] if inner_path else inner_path
+            return 'Third-party', f'(via {gateway}) {inner_src}: {inner_info}'
+        except Exception:
+            return 'Third-party', inner.strip()
+
+    # ------------------------------------------------------------------ #
+    # Symbol lookup
+    # ------------------------------------------------------------------ #
+
+    _SYMBOLS: dict[tuple[str, str], str] = {
+        ('/', '!'): 'Police',    ('/', '#'): 'Digi',      ('/', '$'): 'Phone',
+        ('/', '%'): 'DX-Cluster',('/', '&'): 'IGate',     ('/', '-'): 'House',
+        ('/', '.'): 'X',         ('/', '/'): 'Dot',        ('/', '0'): 'Circle',
+        ('/', '>'): 'Car',       ('/', '?'): 'Server',     ('/', '@'): 'Hurricane',
+        ('/', 'A'): 'Aid',       ('/', 'B'): 'BBS',        ('/', 'C'): 'Canoe',
+        ('/', 'E'): 'Eyeball',   ('/', 'G'): 'Grid',       ('/', 'H'): 'Hotel',
+        ('/', 'I'): 'TCP/IP',    ('/', 'K'): 'School',     ('/', 'L'): 'Lighthouse',
+        ('/', 'N'): 'NTS',       ('/', 'O'): 'Balloon',    ('/', 'R'): 'RV',
+        ('/', 'S'): 'Shuttle',   ('/', 'T'): 'SSTV',       ('/', 'U'): 'Bus',
+        ('/', 'V'): 'ATV',       ('/', 'W'): 'WX-Station', ('/', 'X'): 'Helicopter',
+        ('/', 'Y'): 'Yacht',     ('/', '['): 'Jogger',     ('/', '^'): 'Aircraft',
+        ('/', '_'): 'WX',        ('/', 'a'): 'Ambulance',  ('/', 'b'): 'Bike',
+        ('/', 'd'): 'Fire-Dept', ('/', 'e'): 'Horse',      ('/', 'f'): 'Fire-Truck',
+        ('/', 'g'): 'Glider',    ('/', 'h'): 'Hospital',   ('/', 'j'): 'Jeep',
+        ('/', 'k'): 'Truck',     ('/', 'l'): 'Laptop',     ('/', 'n'): 'Node',
+        ('/', 'r'): 'Antenna',   ('/', 's'): 'Ship',       ('/', 'u'): 'Truck-18w',
+        ('/', 'v'): 'Van',       ('/', 'y'): 'Yacht',
+        ('\\', '#'): 'Digi(alt)',('\\', '&'): 'IGate(alt)',('\\', '-'): 'House(alt)',
+        ('\\', 'Y'): 'House2',   ('\\', 'a'): 'ARRL/ARES',('\\', 'k'): 'SUV',
+        ('\\', 'u'): 'Bus(alt)',
+    }
+
+    @staticmethod
+    def _symbol(table: str, code: str) -> str:
+        return AprsDecoder._SYMBOLS.get((table, code), f"sym:{table}{code}")
+
+    # ------------------------------------------------------------------ #
+    # Plain text formatter (for decode())
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _format_plain(frame: DecodedFrame) -> str:
+        header = frame.source
+        if frame.path:
+            header += f'  ›  {frame.path}'
+        if frame.aprs_id:
+            header += f'  [{frame.aprs_id}]'
+        return f'{header}\n  {frame.type_str}: {frame.info}'
+
+
+# ---------------------------------------------------------------------------
+# Module-level helper: HTML-escape a string
+# ---------------------------------------------------------------------------
+
+def _e(s: str) -> str:
+    """HTML-escape a string for safe insertion into QTextEdit HTML."""
+    return _html_mod.escape(str(s), quote=False)
+
 # === src/pk232py/modes/base_mode.py ===
 # pk232py - Modern multimode terminal for AEA PK-232 / PK-232MBX TNC
 # Copyright (C) 2026  OE3GAS  —  GPL v2
@@ -6062,6 +6900,18 @@ FSPEED_90  = 90
 FSPEED_120 = 120
 FSPEED_240 = 240
 
+# TNC FSPEED index mapping: RPM value → TNC index (0-4)
+# The TNC expects a single-digit index, NOT the RPM value.
+# FS 0 = 90 LPM, FS 1 = 60 LPM, FS 2 = 120 LPM (standard),
+# FS 3 = 180 LPM, FS 4 = 240 LPM
+FSPEED_RPM_TO_IDX: dict[int, int] = {
+    90:  0,
+    60:  1,
+    120: 2,   # standard WEFAX
+    180: 3,
+    240: 4,
+}
+
 
 class FAXMode(BaseMode):
     """HF Weather-chart FAX receive mode.
@@ -6079,8 +6929,7 @@ class FAXMode(BaseMode):
     """
 
     name         = "FAX"
-    host_command = b'FA'
-    verbose_command = b"FAX\r\n"
+    host_command = b'FA'   # Host Mode activation (FA mnemonic)
 
     def __init__(
         self,
@@ -6096,6 +6945,7 @@ class FAXMode(BaseMode):
         self.on_data_received: Optional[Callable[[bytes], None]] = None
 
     def get_activate_frames(self) -> list[bytes]:
+        """Return FA frame — switches TNC to FAX receive mode."""
         return [build_command(b'FA')]
 
     def get_init_frames(self) -> list[bytes]:
@@ -6120,12 +6970,17 @@ class FAXMode(BaseMode):
 
     @staticmethod
     def fspeed_frame(rpm: int) -> bytes:
-        """FSPEED — drum rotation speed in RPM (mnemonic FS).
+        """FSPEED — drum rotation speed (mnemonic FS).
 
-        Common values: 60, 90, 120, 240 RPM.
-        Standard HF weather FAX uses 120 RPM.
+        The TNC expects the FSPEED INDEX (0-4), not the RPM value.
+        Looks up rpm in FSPEED_RPM_TO_IDX; defaults to index 2
+        (120 LPM) if the rpm value is not found.
+
+        Args:
+            rpm: Drum speed in RPM (60, 90, 120, 180, 240).
         """
-        return build_command(b'FS', str(rpm).encode('ascii'))
+        idx = FSPEED_RPM_TO_IDX.get(rpm, 2)   # default: 120 LPM
+        return build_command(b'FS', str(idx).encode('ascii'))
 
     @staticmethod
     def aspect_frame(value: int) -> bytes:
@@ -8866,6 +9721,18 @@ class MainWindow(QMainWindow):
         self._baudot_ctrl.set_mspeed(50)   # default 50 Baud — updated from config
         # Re-entry guard for eventFilter.
         self._in_event_filter: bool = False
+        # Flag: True when user explicitly requested Host Mode exit
+        # (Leave Host Mode button/menu). Ensures the verbose
+        # terminal is shown even if an opmode screen is still active.
+        # PACTOR temporarily exits Host Mode but keeps its screen —
+        # it does NOT set this flag.
+        self._exiting_host_mode_by_user: bool = False
+
+        # Packet monitor frame buffer — used for APRS re-decode on toggle.
+        # Each entry is (utc_timestamp_str, raw_frame_text).
+        # When APRS toggle fires, _packet_rx_redraw() re-renders all entries.
+        self._packet_raw_frames: list[tuple[str, str]] = []
+        self._packet_aprs_active: bool = False
 
         self._build_ui()
         self._connect_signals()
@@ -8979,6 +9846,7 @@ class MainWindow(QMainWindow):
         param_menu = mb.addMenu("&Parameters")
         # Implemented dialogs
         _implemented = {"HF Packet...", "Misc...", "PACTOR...", "AMTOR / NAVTEX / TDM...", "BAUDOT / ASCII / CW...", "MailDrop..."}
+        self._act_params_pactor = None
         for label, slot in [
             ("HF Packet...",             self._on_params_hf_packet),
             ("PACTOR...",                self._on_params_pactor),
@@ -8991,6 +9859,8 @@ class MainWindow(QMainWindow):
             act.setEnabled(label in _implemented)
             act.triggered.connect(slot)
             param_menu.addAction(act)
+            if label == "PACTOR...":
+                self._act_params_pactor = act
 
  # Configure 
         cfg_menu = mb.addMenu("&Configure")
@@ -9057,6 +9927,17 @@ class MainWindow(QMainWindow):
         self._mode_combo.setEnabled(False)
         self._mode_combo.currentTextChanged.connect(self._on_mode_selected)
         tb.addWidget(self._mode_combo)
+
+        # TNC Firmware version label — populated in _on_verbose_mode_ready()
+        tb.addSeparator()
+        tb.addWidget(QLabel(" TNC-Firmware: "))
+        self._lbl_firmware = QLabel("—")
+        self._lbl_firmware.setFont(QFont("Courier New", 9))
+        self._lbl_firmware.setStyleSheet("color: #88aacc;")
+        self._lbl_firmware.setToolTip(
+            "TNC firmware version from boot banner"
+        )
+        tb.addWidget(self._lbl_firmware)
 
         # ── Spacer + Mode/Connection status indicator (right-aligned) ────────
         spacer = QWidget()
@@ -9609,12 +10490,60 @@ class MainWindow(QMainWindow):
         self._log_monitor("[SYS] TNC in verbose mode")
         self._sb_mode.setText("Mode: VERBOSE")
         self._set_mode_indicator("verbose")
+
+        # Parse firmware version from TNC banner and show in toolbar.
+        # Banner example: "AEA PK-232M ...\nRelease 01.AUG.91"
+        # We extract the 'Release xx.MON.YY' token.
+        _banner = getattr(self._serial, 'tnc_banner', '')
+        _fw = "unknown"
+        for _line in _banner.splitlines():
+            _line = _line.strip()
+            if _line.lower().startswith("release"):
+                _fw = _line   # e.g. "Release 01.AUG.91"
+                break
+        if hasattr(self, '_lbl_firmware'):
+            self._lbl_firmware.setText(_fw)
         self._stack.setCurrentIndex(1)
         self._vt_input.setFocus()
         self._vt_display.clear()
         self._vt_append("[SYS] TNC ready in verbose mode\n")
-        # Enable mode selector -- all modes with verbose_command selectable here
+        # Enable mode selector
         self._mode_combo.setEnabled(True)
+
+        # Disable 'PACTOR' entry when TNC has no PACTOR option.
+        # QStandardItemModel.item(idx).setEnabled(False) greys out
+        # the entry so the user sees it is unavailable.
+        _has_pactor = getattr(self._serial, 'has_pactor', True)
+
+        # Disable PACTOR opmode in ComboBox
+        _cb_model = self._mode_combo.model()
+        for _i in range(self._mode_combo.count()):
+            if self._mode_combo.itemText(_i) == "PACTOR":
+                _cb_item = _cb_model.item(_i)
+                _cb_item.setEnabled(_has_pactor)
+                if not _has_pactor:
+                    _cb_item.setToolTip(
+                        "PACTOR nicht verf\u00fcgbar \u2014 "
+                        "diese TNC-Firmware hat keine PACTOR-Option"
+                    )
+                else:
+                    _cb_item.setToolTip("")
+                break
+
+        # Disable Parameters → PACTOR... menu entry
+        if self._act_params_pactor is not None:
+            self._act_params_pactor.setEnabled(_has_pactor)
+            if not _has_pactor:
+                self._act_params_pactor.setToolTip(
+                    "PACTOR nicht verf\u00fcgbar \u2014 "
+                    "diese TNC-Firmware hat keine PACTOR-Option"
+                )
+                self._log_monitor(
+                    "[SYS] TNC has no PACTOR \u2014 "
+                    "PACTOR mode + Parameters menu disabled"
+                )
+            else:
+                self._act_params_pactor.setToolTip("")
 
         # Upload parameters unless Fast Initialization is selected.
         # Fast Init skips the parameter upload and goes directly to
@@ -9676,6 +10605,9 @@ class MainWindow(QMainWindow):
 
     def _on_host_mode_exit(self) -> None:
         if self._serial.is_connected:
+            # Signal _update_host_mode_ui that this is a genuine
+            # user-initiated exit — always show verbose terminal.
+            self._exiting_host_mode_by_user = True
             self._serial.exit_host_mode()
 
     def _on_recovery(self) -> None:
@@ -9766,9 +10698,30 @@ class MainWindow(QMainWindow):
         if mode is None:
             return
 
+        from .screens.packet_screen import PacketBaseScreen
+        _is_packet = isinstance(
+            self._opmode_stack.currentWidget(), PacketBaseScreen
+        )
+        # When leaving packet mode: discard buffer and APRS state.
+        # Fresh start next time packet mode is entered.
+        if not _is_packet:
+            self._packet_raw_frames.clear()
+            self._packet_aprs_active = False
+
         # ARQ / general received data
         if hasattr(mode, "on_data_received"):
-            mode.on_data_received = self._on_mode_data_received
+            if _is_packet:
+                # Packet mode: callback receives (channel, data)
+                mode.on_data_received = self._on_packet_data_received
+            else:
+                mode.on_data_received = self._on_mode_data_received
+
+        # Monitored / unproto frames ($3F)
+        if hasattr(mode, "on_monitor_frame"):
+            if _is_packet:
+                mode.on_monitor_frame = self._on_packet_monitor_frame
+            else:
+                mode.on_monitor_frame = self._on_mode_data_received
 
         # PACTOR FEC / Unproto data ($3F) — same handler as ARQ data
         if hasattr(mode, "on_fec_received"):
@@ -9786,9 +10739,30 @@ class MainWindow(QMainWindow):
             else:
                 mode.on_link_message = self._on_mode_link_message
 
-        # DATA_ACK → colour TX green + show in RX
+        # DATA_ACK ($5F) — Packet: flow control; RTTY: colour tracking
         if hasattr(mode, 'on_data_ack'):
-            mode.on_data_ack = self._on_rtty_data_ack
+            if _is_packet:
+                mode.on_data_ack = self._on_packet_data_ack
+            else:
+                mode.on_data_ack = self._on_rtty_data_ack
+
+        # Packet TX: wire Enter key in tx_input to DATA frame send
+        if _is_packet:
+            screen = self._opmode_stack.currentWidget()
+            if hasattr(screen, 'tx_input'):
+                try:
+                    screen.tx_input.textChanged.disconnect(
+                        self._on_packet_tx_enter
+                    )
+                except (RuntimeError, TypeError):
+                    pass
+                # Use keyPressEvent override instead of textChanged
+                # — see _on_packet_tx_enter for the Enter detection
+                screen.tx_input._packet_send_slot = self._on_packet_tx_enter
+
+        # FAX: wire pixel data callback
+        if mode.name == "FAX" and hasattr(mode, 'on_data_received'):
+            mode.on_data_received = self._on_fax_data_received
 
         # Wire screen buttons (SEND, RECEIVE) to MainWindow slots
         self._wire_screen_buttons()
@@ -9802,7 +10776,11 @@ class MainWindow(QMainWindow):
         Maps TNC link-message text to the status keys used by
         AmtorScreen and PactorScreen.
         """
-        def handler(msg: str) -> None:
+        def handler(*args) -> None:
+            # Accept both 1-arg (msg) and 2-arg (channel, msg) calls.
+            # HFPacketMode calls on_link_message(ch, text); AMTOR/PACTOR
+            # call on_link_message(text).
+            msg = args[-1] if args else ""
             # 1. General log / monitor
             self._on_mode_link_message(msg)
             # 2. Update screen status label
@@ -9873,11 +10851,50 @@ class MainWindow(QMainWindow):
                 self._on_screen_rbaud_changed
             )
 
+        # Baudot: Switch figs (FIGS 0x1B) and Switch char (LTRS 0x1F)
+        # These inject Baudot shift-control bytes directly into TX stream.
+        for _btn_name, _byte in (
+            ("btn_figs",  "\x1b"),   # FIGS — switch to figures/digits
+            ("btn_chars", "\x1f"),   # LTRS — switch back to letters
+        ):
+            _btn = getattr(screen, _btn_name, None)
+            if _btn is not None:
+                try:
+                    _btn.clicked.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                _btn.clicked.connect(
+                    (lambda _b=_byte: lambda: self._on_rtty_char_ready(_b))()
+                )
+
+        # Baudot: Switch figs / Switch char — direct TNC send, not buffered.
+        # FIGS (0x1B) and LTRS (0x1F) are Baudot shift control bytes sent
+        # immediately to the TNC regardless of SEND/RECEIVE state.
+        for _btn_name, _byte in (
+            ("btn_figs",  b"\x1b"),   # FIGS — switch TNC to figures/digits
+            ("btn_chars", b"\x1f"),   # LTRS — switch TNC back to letters
+        ):
+            _btn = getattr(screen, _btn_name, None)
+            if _btn is not None:
+                try:
+                    _btn.clicked.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+                _btn.clicked.connect(
+                    (lambda _b=_byte: lambda: (
+                        self._serial.send_data(_b, channel=0)
+                        if self._serial.is_connected
+                           and self._serial.is_host_mode
+                        else None
+                    ))()
+                )
+
         # Phase 3 — identity fields, spinboxes, toggles, NAVTEX filters
         self._wire_identity_fields(screen)
         self._wire_morse_params(screen)
         self._wire_toggle_buttons(screen)
         self._wire_navtex_filters(screen)
+        self._wire_fax_buttons(screen)
 
         # char_ready: legacy signal — kept for non-Baudot modes
         if hasattr(screen, "char_ready"):
@@ -10190,6 +11207,8 @@ class MainWindow(QMainWindow):
         if rx is not None:
             rx.clear()
         self._shared_rx_doc = None
+        self._packet_raw_frames: list[tuple[str, str]] = []
+        self._packet_aprs_active: bool = False
         self._log_monitor("[SYS] RX display cleared")
 
     def _on_rtty_data_ack(self) -> None:
@@ -10573,6 +11592,11 @@ class MainWindow(QMainWindow):
         # MailDrop button
         _rewire(screen.btn_maildrop.clicked, self._on_packet_maildrop)
 
+        # APRS decode toggle — VHFPacketScreen only (hidden in HFPacketScreen)
+        if hasattr(screen, "btn_aprs"):
+            _rewire(screen.btn_aprs.toggled, screen.on_aprs_toggled)
+            _rewire(screen.btn_aprs.toggled, self._on_packet_aprs_toggled)
+
         # MHEARD Refresh button
         _rewire(screen.mheard_panel.btn_refresh.clicked, self._on_packet_mheard)
 
@@ -10771,10 +11795,10 @@ class MainWindow(QMainWindow):
             screen.btn_connect.blockSignals(True)
             screen.btn_connect.setChecked(False)
             screen.btn_connect.blockSignals(False)
-            screen.on_connect_toggled(False)
+            screen.on_connect_toggled(False)   # public method on PacketBaseScreen
             return
         from pk232py.comm.frame import build_ch_cmd
-        frame = build_ch_cmd(0, b'CO', callsign.encode('ascii'))
+        frame = build_ch_cmd(1, b'CO', callsign.encode('ascii'))  # ch1 = AX.25 data channel
         self._serial.send_command(frame[2:4], frame[4:-1])
         self._log_monitor(f"[PACKET] Connecting \u2192 {callsign}")
 
@@ -10783,7 +11807,7 @@ class MainWindow(QMainWindow):
         if not self._serial.is_connected or not self._serial.is_host_mode:
             return
         from pk232py.comm.frame import build_ch_cmd
-        frame = build_ch_cmd(0, b'DI')
+        frame = build_ch_cmd(1, b'DI')
         self._serial.send_command(frame[2:4], frame[4:-1])
         self._log_monitor("[PACKET] Disconnect sent")
         screen = self._opmode_stack.currentWidget()
@@ -10793,7 +11817,7 @@ class MainWindow(QMainWindow):
             screen.btn_connect.blockSignals(True)
             screen.btn_connect.setChecked(False)
             screen.btn_connect.blockSignals(False)
-            screen.on_connect_toggled(False)
+            screen.on_connect_toggled(False)   # public method on PacketBaseScreen
 
     def _on_packet_unproto(self, checked: bool) -> None:
         """Unproto button toggled — set TNC UNPROTO path.
@@ -11191,12 +12215,19 @@ class MainWindow(QMainWindow):
             mode.navstn = filter_str
         self._log_monitor(f"[PARAM] NAVSTN → {filter_str}")
 
-    def _on_mode_data_received(self, data: bytes) -> None:
+    def _on_mode_data_received(self, ch_or_data, data=None) -> None:
         """Route decoded TNC data to the correct display widget.
+
+        Accepts both 1-arg (data) and 2-arg (channel, data) calls so
+        that this handler is safe regardless of which mode wires it.
+        Packet modes use _on_packet_data_received instead (see
+        _wire_mode_callbacks), but this keeps us crash-proof.
 
         Host Mode (stack index 0): active opmode screen's rx_display.
         Verbose Mode (stack index 1): verbose terminal _vt_display.
         """
+        if data is None:
+            data = ch_or_data   # 1-arg call: ch_or_data IS the data
         try:
             text = data.decode("ascii", errors="replace")
         except Exception:
@@ -11226,6 +12257,306 @@ class MainWindow(QMainWindow):
         if self._monitor_container.isVisible():
             if self._mon_btn_decoded.isChecked():
                 self._log_monitor(f"[ECHO] {text.rstrip()}")
+
+    # ------------------------------------------------------------------
+    # FAX handlers
+    # ------------------------------------------------------------------
+
+    def _wire_fax_buttons(self, screen) -> None:
+        """Wire FaxScreen parameter controls to TNC commands.
+
+        Skips silently for any screen that is not a FaxScreen.
+        Uses try/disconnect to avoid stacking on repeated calls.
+        """
+        if not hasattr(screen, 'combo_fspeed'):
+            return
+
+        def _rewire(signal, slot):
+            try:
+                signal.disconnect(slot)
+            except (RuntimeError, TypeError):
+                pass
+            signal.connect(slot)
+
+        _rewire(screen.combo_fspeed.currentIndexChanged,
+                self._on_fax_fspeed_changed)
+        _rewire(screen.combo_aspect.currentIndexChanged,
+                self._on_fax_aspect_changed)
+        _rewire(screen.btn_faxneg.toggled,
+                self._on_fax_faxneg_toggled)
+        _rewire(screen.btn_rxrev.toggled,
+                self._on_fax_rxrev_toggled)
+
+    def _on_fax_data_received(self, data: bytes) -> None:
+        """Handle FAX pixel data ($3F RX_MONITOR frames).
+
+        Each call delivers one horizontal scan line as raw bytes
+        (grayscale 0=black, 255=white).  The data is forwarded to
+        FaxImageWidget.append_line() which renders it immediately.
+        """
+        screen = self._opmode_stack.currentWidget()
+        if not hasattr(screen, 'fax_image'):
+            return
+        screen.fax_image.append_line(data)
+        n = len(screen.fax_image._lines)
+        screen.lbl_lines.setText(f"Zeilen: {n}")
+        # Update status on first line and periodically
+        if n == 1 or n % 50 == 0:
+            screen._set_status("EMPFANG …", "#cc8800")
+        self._log_monitor(f"[FAX] line {n} ({len(data)} bytes)")
+
+    def _on_fax_fspeed_changed(self, index: int) -> None:
+        """FSPEED dropdown changed — send FS frame to TNC."""
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        screen = self._opmode_stack.currentWidget()
+        combo = getattr(screen, 'combo_fspeed', None)
+        if combo is None:
+            return
+        from pk232py.modes.fax import FSPEED_TABLE
+        _, rpm = FSPEED_TABLE[index]
+        from pk232py.modes.fax import FAXMode
+        frame = FAXMode.fspeed_frame(rpm)
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[FAX] FSPEED → {rpm} RPM")
+
+    def _on_fax_aspect_changed(self, index: int) -> None:
+        """ASPECT ComboBox changed — send AY frame + update display ratio.
+
+        *index* is the ComboBox index (0-3).
+        ASPECT_TABLE[index] gives (tnc_value, ioc, ratio, label).
+        """
+        from pk232py.ui.screens.fax_screen import ASPECT_TABLE
+        if index < 0 or index >= len(ASPECT_TABLE):
+            return
+        tnc_value, ioc, _ratio, _ = ASPECT_TABLE[index]
+
+        # ASPECT only affects TNC sampling — no display effect.
+        # Send AY frame to TNC.
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.modes.fax import FAXMode
+        frame = FAXMode.aspect_frame(tnc_value)
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(
+            f"[FAX] ASPECT {tnc_value} (IOC {ioc}, ~{2*ioc} px/line)"
+        )
+
+    def _on_fax_faxneg_toggled(self, checked: bool) -> None:
+        """FAXNEG button toggled — send FN frame + update image."""
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, 'fax_image'):
+            screen.fax_image.set_faxneg(checked)
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.modes.fax import FAXMode
+        frame = FAXMode.faxneg_frame(checked)
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[FAX] FAXNEG → {'ON' if checked else 'OFF'}")
+
+    def _on_fax_rxrev_toggled(self, checked: bool) -> None:
+        """RXREV button toggled — send RX frame to TNC.
+
+        RXREV inverts the entire received signal (including sync).
+        Different from FAXNEG which only inverts pixel values.
+        TNC mnemonic: RV (RXREV Y/N).
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'RV', b'Y' if checked else b'N')
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor(f"[FAX] RXREV → {'ON' if checked else 'OFF'}")
+
+    # ------------------------------------------------------------------
+    # Packet RX/TX handlers
+    # ------------------------------------------------------------------
+
+    def _on_packet_data_received(self, channel: int, data: bytes) -> None:
+        """Handle $3x — received AX.25 data on *channel*.
+
+        Displays the decoded text in the Packet screen's rx_display
+        in the standard RX blue colour.  A channel prefix is shown
+        when channel != 0 so multi-stream connections are readable.
+        """
+        try:
+            text = data.decode('ascii', errors='replace')
+        except Exception:
+            text = repr(data)
+
+        # Channel prefix for multi-stream (channel 0 = unproto/default)
+        prefix = f"[CH{channel}] " if channel not in (0, 1) else ""
+        self._log_terminal(prefix + text)
+        self._log_monitor(f"[PKT RX ch{channel}] {text.rstrip()}")
+
+    def _on_packet_monitor_frame(self, data: bytes) -> None:
+        """Handle $3F — monitored/unproto AX.25 frame.
+
+        Steps:
+          1. Decode bytes → text
+          2. Timestamp the frame (UTC HH:MM:SS)
+          3. Append (ts, raw_text) to _packet_raw_frames buffer
+             so we can re-render when APRS mode is toggled
+          4. Display: raw text (APRS off) or decoded (APRS on)
+        """
+        from datetime import datetime, timezone
+        ts = datetime.now(timezone.utc).strftime("%H:%M:%S")
+
+        try:
+            text = data.decode('ascii', errors='replace')
+        except Exception:
+            text = repr(data)
+        text = text.replace('\r', '').strip()
+
+        # Store raw frame in buffer (always — independent of display mode)
+        self._packet_raw_frames.append((ts, text))
+
+        # Display: route through decoder if APRS mode is active
+        screen = self._opmode_stack.currentWidget()
+        if self._packet_aprs_active:
+            from pk232py.modes.aprs_decoder import AprsDecoder
+            display_text = AprsDecoder.decode_html(text, ts)
+            self._packet_rx_append(screen, ts, display_text, is_html=True)
+        else:
+            self._packet_rx_append(screen, ts, text, is_html=False)
+        self._log_monitor(f"[MON] {text[:80]}")
+
+    def _packet_rx_append(
+            self, screen, ts: str, text: str,
+            is_html: bool = False,
+            color: str = "#aaaaaa") -> None:
+        """Append one timestamped frame to screen.rx_display.
+
+        All packet monitor output goes through here so the
+        formatting is always consistent.
+
+        Parameters
+        ----------
+        screen  : QWidget — the active opmode screen
+        ts      : str     — UTC timestamp string "HH:MM:SS"
+        text    : str     — frame text (raw) or HTML (decoded)
+        is_html : bool    — if True, render text via insertHtml
+        color   : str     — QColor hex string (default grey)
+        """
+        if not hasattr(screen, "rx_display"):
+            return
+        from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
+        cursor = screen.rx_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        if is_html:
+            cursor.insertHtml(text)
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor("#111111"))
+            cursor.setCharFormat(fmt)
+            cursor.insertText("\n")
+        else:
+            fmt = QTextCharFormat()
+            fmt.setForeground(QColor(color))
+            cursor.setCharFormat(fmt)
+            # Timestamp prefix on the first line only
+            lines = text.splitlines()
+            if lines:
+                cursor.insertText(f"[{ts}] {lines[0]}\n")
+                for line in lines[1:]:
+                    cursor.insertText(f"         {line}\n")
+            cursor.insertText("\n")      # blank line between frames
+        screen.rx_display.setTextCursor(cursor)
+        screen.rx_display.ensureCursorVisible()
+
+    def _packet_rx_redraw(self, screen) -> None:
+        """Re-render the entire _packet_raw_frames buffer.
+
+        Called when the APRS toggle changes so the user sees
+        all frames in the new mode (raw ↔ decoded).
+        The RX display is cleared first, then all buffered
+        frames are written again — either raw or decoded.
+        """
+        if not hasattr(screen, "rx_display"):
+            return
+        screen.rx_display.clear()
+        if self._packet_aprs_active:
+            from pk232py.modes.aprs_decoder import AprsDecoder
+        for ts, raw_text in self._packet_raw_frames:
+            if self._packet_aprs_active:
+                display_text = AprsDecoder.decode_html(raw_text, ts)
+                self._packet_rx_append(screen, ts, display_text, is_html=True)
+            else:
+                self._packet_rx_append(screen, ts, raw_text, is_html=False)
+
+    def _on_packet_aprs_toggled(self, checked: bool) -> None:
+        """APRS decode button toggled.
+
+        checked=True:  switch to APRS decoded display.
+                       All frames in the buffer are decoded
+                       and the RX window is redrawn.
+        checked=False: switch back to raw display.
+                       Buffer is re-rendered as original text.
+
+        The visual button style is handled by
+        PacketBaseScreen.on_aprs_toggled() which is also
+        connected to btn_aprs.toggled.
+        """
+        self._packet_aprs_active = checked
+        screen = self._opmode_stack.currentWidget()
+        self._packet_rx_redraw(screen)
+        state = "ON" if checked else "OFF"
+        self._log_monitor(f"[APRS] decode mode {state}")
+
+    def _on_packet_data_ack(self, channel: int = 0) -> None:
+        """Handle $5F DATA_ACK for Packet mode.
+
+        For Packet, DATA_ACK signals that the TNC has accepted the
+        last data block.  No colour tracking needed — just log it.
+        Flow control (waiting for ACK before next send) is handled
+        by the TNC itself in Host Mode; we just confirm receipt.
+        """
+        self._log_monitor(f"[PKT ACK ch{channel}]")
+
+    def _on_packet_tx_enter(self) -> None:
+        """Send the TX window content as an AX.25 DATA frame.
+
+        Called when the user presses Enter in the Packet screen's
+        tx_input.  Grabs the complete text, sends it as build_data()
+        on channel 1, then clears the TX window.
+
+        Only fires when connected (btn_connect is checked) or in
+        unproto mode (btn_unproto is checked).
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        screen = self._opmode_stack.currentWidget()
+        if screen is None or not hasattr(screen, 'tx_input'):
+            return
+
+        # Only send when connected or in unproto mode
+        connected = (hasattr(screen, 'btn_connect')
+                     and screen.btn_connect.isChecked())
+        unproto   = (hasattr(screen, 'btn_unproto')
+                     and screen.btn_unproto.isChecked())
+        if not connected and not unproto:
+            return
+
+        text = screen.tx_input.toPlainText()
+        if not text.strip():
+            return
+
+        data = (text + '\r').encode('ascii', errors='replace')
+        self._serial.send_data(data, channel=1)
+        self._log_monitor(f"[PKT TX] {text.rstrip()!r}")
+
+        # Echo in RX display (TX yellow) — will be confirmed by DATA_ACK
+        from PyQt6.QtGui import QTextCursor, QColor, QTextCharFormat
+        cursor = screen.rx_display.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor('#ffee88'))  # TX yellow
+        cursor.setCharFormat(fmt)
+        cursor.insertText(f'> {text.rstrip()}\n')
+        screen.rx_display.setTextCursor(cursor)
+        screen.rx_display.ensureCursorVisible()
+
+        # Clear TX window
+        screen.tx_input.clear()
 
     def _on_mode_link_message(self, msg: str) -> None:
         """Display link state messages in RX panel."""
@@ -11674,18 +13005,25 @@ class MainWindow(QMainWindow):
         else:
             self._sb_mode.setText("Mode: VERBOSE")
             self._set_mode_indicator("verbose")
-            # Keep the opmode screen (index 0) when a mode switch
-            # temporarily exits Host Mode for verbose activation
-            # (e.g. PACTOR uses verbose_command).  Only switch to
-            # the Verbose terminal view (index 1) when no opmode
-            # screen is active — i.e. a genuine disconnect / error.
-            active_name = self._modes.current_mode_name
-            mode_has_screen = (
-                active_name is not None
-                and active_name in self._opmode_screens
-            )
-            if not mode_has_screen:
+            if self._exiting_host_mode_by_user:
+                # Genuine user exit: always show verbose terminal
+                # and deactivate the current mode so the next
+                # Host Mode entry starts clean.
+                self._exiting_host_mode_by_user = False
+                if self._modes.current_mode is not None:
+                    self._modes.current_mode.deactivate()
+                    self._modes._active_mode = None
                 self._stack.setCurrentIndex(1)
+            else:
+                # Temporary exit (e.g. PACTOR verbose activation):
+                # keep the opmode screen visible if one is active.
+                active_name = self._modes.current_mode_name
+                mode_has_screen = (
+                    active_name is not None
+                    and active_name in self._opmode_screens
+                )
+                if not mode_has_screen:
+                    self._stack.setCurrentIndex(1)
         self._set_sig(self._ssl_host, active)
         if active:
             self._opmode_timer.start()
@@ -13704,7 +15042,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QLineEdit, QPushButton,
     QFrame, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
@@ -13780,6 +15118,10 @@ class AmtorScreen(QWidget):
     │  [Macro 1]…[Macro 6]                    [Edit Macros]   │
     └─────────────────────────────────────────────────────────┘
     """
+
+    # Signals connected automatically by MainWindow._wire_mode_callbacks()
+    clear_tx_req = pyqtSignal()   # emitted by the "Clear TX" button
+    clear_rx_req = pyqtSignal()   # emitted by the "Clear RX" button
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -14064,6 +15406,20 @@ class AmtorScreen(QWidget):
             self.macro_buttons.append(btn)
 
         macro_row.addStretch()
+
+        # Clear TX / Clear RX — emit signals; MainWindow does the actual work.
+        # NoFocus so a mouse click never steals keyboard focus from TX window.
+        self.btn_clear_tx = QPushButton("Clear TX")
+        self.btn_clear_tx.setFixedWidth(BTN_W)
+        self.btn_clear_tx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_tx.clicked.connect(self.clear_tx_req.emit)
+        macro_row.addWidget(self.btn_clear_tx)
+
+        self.btn_clear_rx = QPushButton("Clear RX")
+        self.btn_clear_rx.setFixedWidth(BTN_W)
+        self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_rx.clicked.connect(self.clear_rx_req.emit)
+        macro_row.addWidget(self.btn_clear_rx)
 
         self.btn_edit_macros = QPushButton("Edit Macros")
         self.btn_edit_macros.setFixedWidth(BTN_W + 20)
@@ -14692,12 +16048,14 @@ class BaudotTxController(QObject):
             self.eot_reached.emit()
             return
         if char.startswith('\x1b'):
-            # [^T:n] timed marker — do NOT send to TNC
+            # [^T:n] timed marker — do NOT send to TNC.
+            # Do NOT clear _tx_queue here — on_send_stop() will roll back
+            # _tx_sent_idx by len(_tx_queue), so the chars after [^T:n]
+            # are correctly re-queued when on_send_start() fires after n sec.
             try:
                 n = int(char[1:])
             except ValueError:
                 n = 1
-            self._tx_queue.clear()
             self._tx_timer.stop()
             self.status_msg.emit(
                 f"[^T:{n}] — switching to RECEIVE, resuming SEND in {n}s")
@@ -14743,6 +16101,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QComboBox, QSpinBox,
     QFrame, QSizePolicy, QGroupBox,
     QScrollArea, QFileDialog, QMessageBox,
+    QSlider,
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QColor
@@ -14759,15 +16118,31 @@ from .opmode_rtty_base import (
 # ---------------------------------------------------------------------------
 
 FSPEED_TABLE = [
-    ("0 – 1.5 LPS  (90 LPM)",   90),
-    ("1 – 1   LPS  (60 LPM)",   60),
-    ("2 – 2   LPS  (120 LPM)",  120),   # Standard
-    ("3 – 3   LPS  (180 LPM)",  180),
-    ("4 – 4   LPS  (240 LPM)",  240),
+    ("FSPEED 0 — 1.5 LPS  (90 LPM)",    90),
+    ("FSPEED 1 — 1   LPS  (60 LPM)",    60),
+    ("FSPEED 2 — 2   LPS  (120 LPM)",  120),   # Standard
+    ("FSPEED 3 — 3   LPS  (180 LPM)",  180),
+    ("FSPEED 4 — 4   LPS  (240 LPM)",  240),
 ]
 
 # Standardbildbreite für WEFAX (Pixel pro Zeile)
-FAX_IMAGE_WIDTH = 800
+# WEFAX image width: pixels/line ≈ 2 × IOC
+# IOC 576 → ~1152 px  (HF weather fax standard, DWD/NOAA)
+# IOC 288 → ~576 px   (older systems)
+# Auto-detects from first received line — this is just the default.
+FAX_IMAGE_WIDTH = 1152
+
+# ASPECT table: (TNC value, IOC, received-to-display ratio, label)
+# ratio = how many received lines are merged into one display line
+# Source: AEA PK-232MBX manual (STABO edition)
+ASPECT_TABLE = [
+    (1, 288, 3, "ASPECT 1  —  IOC 288  —  ~576 px  —  Satellite images"),
+    (2, 576, 6, "ASPECT 2  —  IOC 576  —  ~1152 px —  Weather maps (standard)"),
+    (3, 550, 4, "ASPECT 3  —  IOC 550  —  ~1100 px —  Weather maps (narrow)"),
+    (4, 596, 2, "ASPECT 4  —  IOC 596  —  ~1192 px —  Weather maps (wide)"),
+]
+# Map TNC value → ratio for quick lookup
+ASPECT_RATIO: dict[int, int] = {a: r for a, _, r, _ in ASPECT_TABLE}
 
 
 # ---------------------------------------------------------------------------
@@ -14787,6 +16162,9 @@ class FaxImageWidget(QLabel):
         self._img_width  = width
         self._lines: list[bytes] = []
         self._faxneg = False
+        self._zoom: float = 1.0
+        self._line_height: int = 2   # display pixels per received line
+        self._qimage = None
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.setMinimumHeight(200)
         self.setSizePolicy(
@@ -14801,17 +16179,24 @@ class FaxImageWidget(QLabel):
         self.setPixmap(QPixmap.fromImage(img))
 
     def clear_image(self) -> None:
-        """Löscht das aktuelle Bild."""
+        """Löscht das aktuelle Bild und setzt Breite auf Standard zurück."""
         self._lines.clear()
+        self._img_width = FAX_IMAGE_WIDTH   # reset for next reception
+        self._qimage = None
         self._render_placeholder()
 
     def append_line(self, pixel_data: bytes) -> None:
         """Fügt eine Pixelzeile hinzu und aktualisiert die Anzeige.
 
+        Auto-detects image width from the first received line so the
+        widget adapts to whatever the TNC actually delivers.
+
         Args:
             pixel_data: Bytes mit Graustufenwerten (0=schwarz, 255=weiß).
-                        Länge sollte _img_width entsprechen.
         """
+        if not self._lines and len(pixel_data) > 10:
+            # First line: adopt its length as the image width
+            self._img_width = len(pixel_data)
         self._lines.append(pixel_data)
         self._redraw()
 
@@ -14821,20 +16206,66 @@ class FaxImageWidget(QLabel):
         if self._lines:
             self._redraw()
 
+    def set_zoom(self, factor: float) -> None:
+        """Scale the displayed image by *factor* (1.0 = 100%)."""
+        self._zoom = factor
+        if self._qimage is not None:
+            self._apply_zoom()
+
+    def set_line_height(self, px: int) -> None:
+        """Set how many display pixels each received line occupies.
+
+        px=1: compressed (original, 1 display pixel per data line)
+        px=2: standard  (default, matches typical WEFAX proportions)
+        px=3: expanded
+        px=4: very expanded
+        """
+        self._line_height = max(1, px)
+        if self._lines:
+            self._redraw()
+
+    def _apply_zoom(self) -> None:
+        """Apply current zoom to _qimage and update the pixmap."""
+        w = max(1, int(self._img_width * self._zoom))
+        h = max(1, int(len(self._lines) * self._zoom))
+        scaled = self._qimage.scaled(
+            w, h,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        self.setPixmap(QPixmap.fromImage(scaled))
+        self.setFixedSize(max(w, 200), max(h, 200))
+
     def _redraw(self) -> None:
-        """Baut das QImage aus allen gespeicherten Zeilen neu auf."""
-        h = len(self._lines)
-        if h == 0:
+        """Baut das QImage aus allen gespeicherten Zeilen neu auf.
+
+        Uses bytearray + QImage(data, w, h, bpl, format) constructor
+        to avoid scanLine() which returns a voidptr with unknown size
+        in PyQt6 and cannot be slice-assigned.
+        """
+        n = len(self._lines)
+        if n == 0:
             return
-        img = QImage(self._img_width, h, QImage.Format.Format_Grayscale8)
+        w  = self._img_width
+        lh = self._line_height
+        h  = n * lh
+
+        # One received line = lh display pixels (no merging)
+        buf = bytearray(w * h)
         for y, line in enumerate(self._lines):
-            # Zeile auf Bildbreite zuschneiden / auffüllen
-            row = (line[:self._img_width]).ljust(self._img_width, b'\x80')
-            for x, val in enumerate(row):
-                pixel = (255 - val) if self._faxneg else val
-                img.setPixel(x, y, QColor(pixel, pixel, pixel).rgb())
-        self.setPixmap(QPixmap.fromImage(img))
-        self.setFixedHeight(max(200, h))
+            raw = (line[:w]).ljust(w, b'\x80')
+            if self._faxneg:
+                row = bytes(255 - v for v in raw)
+            else:
+                row = bytes(raw)
+            offset = y * lh * w
+            for dy in range(lh):
+                buf[offset + dy * w : offset + dy * w + w] = row
+
+        img = QImage(buf, w, h, w, QImage.Format.Format_Grayscale8)
+        self._buf = buf
+        self._qimage = img.copy()
+        self._apply_zoom()
 
     def demo_fill(self, n_lines: int = 300) -> None:
         """Füllt das Bild mit einem Demo-Testmuster (Graustufenverlauf)."""
@@ -14958,29 +16389,21 @@ class FaxScreen(QWidget):
 
         param_layout.addSpacing(12)
 
-        # ASPECT SpinBox
+        # ASPECT ComboBox — IOC-based selection
         param_layout.addWidget(_lbl("ASPECT:"))
-        self.btn_asp_dn = _small_btn("−")
-        param_layout.addWidget(self.btn_asp_dn)
-        self.sb_aspect = QSpinBox()
-        self.sb_aspect.setRange(1, 6)
-        self.sb_aspect.setValue(2)
-        self.sb_aspect.setFixedWidth(45)
-        self.sb_aspect.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sb_aspect.setFont(QFont("Courier New", 10))
-        self.sb_aspect.setToolTip(
-            "Zeilendichte: aus 6 empfangenen Zeilen werden n gedruckt.\n"
-            "1 = gestreckt  ·  2 = Standard WEFAX  ·  6 = gestaucht"
+        self.combo_aspect = QComboBox()
+        for _a, _ioc, _r, _label in ASPECT_TABLE:
+            self.combo_aspect.addItem(_label)
+        self.combo_aspect.setCurrentIndex(1)   # default: ASPECT 2, IOC 576
+        self.combo_aspect.setFont(QFont("Courier New", 9))
+        self.combo_aspect.setToolTip(
+            "ASPECT: Zeilendichte (IOC).\n"
+            "ASPECT 2 / IOC 576 = Standard Wetterkarten (DWD, NOAA).\n"
+            "ASPECT 1 / IOC 288 = Satellitenbilder."
         )
-        param_layout.addWidget(self.sb_aspect)
-        self.btn_asp_up = _small_btn("+")
-        param_layout.addWidget(self.btn_asp_up)
-        self.btn_asp_dn.clicked.connect(
-            lambda: self.sb_aspect.setValue(self.sb_aspect.value() - 1)
-        )
-        self.btn_asp_up.clicked.connect(
-            lambda: self.sb_aspect.setValue(self.sb_aspect.value() + 1)
-        )
+        param_layout.addWidget(self.combo_aspect)
+        # Keep sb_aspect as hidden compatibility shim (MainWindow wires it)
+        self.sb_aspect = self.combo_aspect   # alias for compatibility
 
         param_layout.addSpacing(12)
 
@@ -15054,6 +16477,51 @@ class FaxScreen(QWidget):
 
         add_hline(root)
 
+        # --- Zoom-Regler -------------------------------------------------
+        zoom_row = QHBoxLayout()
+
+        # Horizontal zoom
+        zoom_row.addWidget(QLabel("Zoom:"))
+        self._zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self._zoom_slider.setRange(100, 300)   # 100% – 300%
+        self._zoom_slider.setValue(100)
+        self._zoom_slider.setTickInterval(25)
+        self._zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._zoom_slider.setFixedWidth(220)
+        self._zoom_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._zoom_slider.setToolTip("Horizontaler Zoom: 100% – 300%")
+        self._zoom_slider.valueChanged.connect(self._on_zoom_changed)
+        zoom_row.addWidget(self._zoom_slider)
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setFont(QFont("Courier New", 9))
+        self._zoom_label.setFixedWidth(42)
+        zoom_row.addWidget(self._zoom_label)
+
+        zoom_row.addSpacing(20)
+
+        # Vertical line height
+        zoom_row.addWidget(QLabel("Zeilenabstand:"))
+        self._lh_slider = QSlider(Qt.Orientation.Horizontal)
+        self._lh_slider.setRange(1, 4)    # 1–4 px per line
+        self._lh_slider.setValue(2)       # default: 2px (standard WEFAX)
+        self._lh_slider.setTickInterval(1)
+        self._lh_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._lh_slider.setFixedWidth(100)
+        self._lh_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._lh_slider.setToolTip(
+            "Zeilenhöhe: 1–4 Pixel pro empfangener Zeile.\n"
+            "2 = Standard WEFAX  ·  1 = komprimiert  ·  4 = gedehnt"
+        )
+        self._lh_slider.valueChanged.connect(self._on_lh_changed)
+        zoom_row.addWidget(self._lh_slider)
+        self._lh_label = QLabel("2 px")
+        self._lh_label.setFont(QFont("Courier New", 9))
+        self._lh_label.setFixedWidth(36)
+        zoom_row.addWidget(self._lh_label)
+
+        zoom_row.addStretch()
+        root.addLayout(zoom_row)
+
         # --- Bild-Scroll-Bereich -----------------------------------------
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -15068,6 +16536,21 @@ class FaxScreen(QWidget):
         scroll.setWidget(self.fax_image)
 
         root.addWidget(scroll, stretch=1)
+
+        # Clear-Image row — receive-only screen clears its own image buffer.
+        clear_row = QHBoxLayout()
+        clear_row.addStretch()
+        self.btn_clear_image = QPushButton("Clear Image")
+        self.btn_clear_image.setFixedWidth(BTN_W + 20)
+        self.btn_clear_image.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_image.clicked.connect(self._on_clear_image)
+        clear_row.addWidget(self.btn_clear_image)
+        root.addLayout(clear_row)
+
+    def _on_clear_image(self) -> None:
+        """Clear the received FAX image and reset the line counter."""
+        self.fax_image.clear_image()
+        self.lbl_lines.setText("Zeilen: 0")
 
     # ------------------------------------------------------------------
     # Demo-Modus
@@ -15139,6 +16622,33 @@ class FaxScreen(QWidget):
     # ------------------------------------------------------------------
     # Hilfsmethoden
     # ------------------------------------------------------------------
+
+    def _on_zoom_changed(self, value: int) -> None:
+        """Zoom slider moved — rescale the FAX image display."""
+        factor = value / 100.0
+        self._zoom_label.setText(f"{value}%")
+        self.fax_image.set_zoom(factor)
+
+    def _on_lh_changed(self, value: int) -> None:
+        """Line height slider moved — change px per received line."""
+        self._lh_label.setText(f"{value} px")
+        self.fax_image.set_line_height(value)
+
+    def set_receiving(self, active: bool) -> None:
+        """Called by MainWindow when FAX mode is activated/deactivated.
+
+        Disables the Demo button while Host Mode is active so that
+        demo data cannot interfere with real TNC data.
+        """
+        self.btn_demo.setEnabled(not active)
+        if active:
+            self.btn_demo.setToolTip(
+                "Demo nicht verfügbar während TNC verbunden ist."
+            )
+        else:
+            self.btn_demo.setToolTip(
+                "Testbild animiert aufbauen (Mockup-Demo)"
+            )
 
     def _set_status(self, text: str, color: str) -> None:
         self.lbl_status.setText(f"●  {text}")
@@ -16087,7 +17597,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QLineEdit, QPushButton, QSpinBox,
     QFrame, QSizePolicy, QGroupBox,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
@@ -16138,6 +17648,10 @@ class MorseScreen(QWidget):
     │  [Macro 1]…[Macro 6]                    [Edit Macros]  │
     └────────────────────────────────────────────────────────┘
     """
+
+    # Signals connected automatically by MainWindow._wire_mode_callbacks()
+    clear_tx_req = pyqtSignal()   # emitted by the "Clear TX" button
+    clear_rx_req = pyqtSignal()   # emitted by the "Clear RX" button
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -16397,6 +17911,20 @@ class MorseScreen(QWidget):
             self.macro_buttons.append(btn)
 
         macro_row.addStretch()
+
+        # Clear TX / Clear RX — emit signals; MainWindow does the actual work.
+        # NoFocus so a mouse click never steals keyboard focus from TX window.
+        self.btn_clear_tx = QPushButton("Clear TX")
+        self.btn_clear_tx.setFixedWidth(BTN_W)
+        self.btn_clear_tx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_tx.clicked.connect(self.clear_tx_req.emit)
+        macro_row.addWidget(self.btn_clear_tx)
+
+        self.btn_clear_rx = QPushButton("Clear RX")
+        self.btn_clear_rx.setFixedWidth(BTN_W)
+        self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_rx.clicked.connect(self.clear_rx_req.emit)
+        macro_row.addWidget(self.btn_clear_rx)
 
         self.btn_edit_macros = QPushButton("Edit Macros")
         self.btn_edit_macros.setFixedWidth(BTN_W + 20)
@@ -16795,9 +18323,23 @@ class NavtexScreen(QWidget):
         )
         root.addWidget(self.rx_display, stretch=1)
 
+        # Clear-RX row — receive-only screen clears itself.
+        clear_row = QHBoxLayout()
+        clear_row.addStretch()
+        self.btn_clear_rx = QPushButton("Clear RX")
+        self.btn_clear_rx.setFixedWidth(BTN_W)
+        self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_rx.clicked.connect(self._on_clear_rx)
+        clear_row.addWidget(self.btn_clear_rx)
+        root.addLayout(clear_row)
+
         add_hline(root)
 
         # --- RX-Fenster --------------------------------------------------
+
+    def _on_clear_rx(self) -> None:
+        """Clear the NAVTEX receive window (receive-only, local state)."""
+        self.rx_display.clear()
 
     # ------------------------------------------------------------------
     # NAVMSG Schnell-Buttons
@@ -17680,7 +19222,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from PyQt6.QtCore import Qt, QTimer, QEvent
+from PyQt6.QtCore import Qt, QTimer, QEvent, pyqtSignal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QApplication, QWidget,
@@ -17740,6 +19282,22 @@ _STYLE_UNPROTO_ON = (
     "QPushButton {"
     "  background-color: #1a4a7a; color: white;"
     "  border: 2px solid #0a2a5a; border-radius: 4px;"
+    "  font-weight: bold; padding: 4px 8px;"
+    "}"
+)
+# APRS decode toggle — amber/orange when active
+_STYLE_APRS_OFF = (
+    "QPushButton {"
+    "  background-color: #445566; color: white;"
+    "  border: 1px solid #334455; border-radius: 4px;"
+    "  font-weight: bold; padding: 4px 8px;"
+    "}"
+    "QPushButton:hover { background-color: #556677; }"
+)
+_STYLE_APRS_ON = (
+    "QPushButton {"
+    "  background-color: #b06000; color: white;"
+    "  border: 2px solid #804000; border-radius: 4px;"
     "  font-weight: bold; padding: 4px 8px;"
     "}"
 )
@@ -17889,6 +19447,11 @@ class PacketBaseScreen(QWidget):
     HBAUD_DEFAULT   = "300"
     MONITOR_DEFAULT = "4"
 
+    # Signals connected automatically by MainWindow._wire_mode_callbacks().
+    # Declared on the base class → HF and VHF Packet inherit them.
+    clear_tx_req = pyqtSignal()
+    clear_rx_req = pyqtSignal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
@@ -17914,7 +19477,10 @@ class PacketBaseScreen(QWidget):
             parent=self,
         )
 
-        # No screen-level EventFilter: MainWindow handles TX routing.
+        # Intercept Enter in tx_input → send as AX.25 DATA frame.
+        # _packet_send_slot is set by MainWindow._wire_mode_callbacks().
+        self.tx_input._packet_send_slot = None
+        self.tx_input.installEventFilter(self)
         QTimer.singleShot(0, lambda: self.tx_input.setFocus())
 
     # ------------------------------------------------------------------
@@ -17922,6 +19488,15 @@ class PacketBaseScreen(QWidget):
     # ------------------------------------------------------------------
 
     def eventFilter(self, obj, event) -> bool:
+        # Enter / Return in tx_input → send as AX.25 DATA frame
+        if (event.type() == QEvent.Type.KeyPress
+                and obj is getattr(self, 'tx_input', None)):
+            from PyQt6.QtCore import Qt as _Qt
+            if event.key() in (_Qt.Key.Key_Return, _Qt.Key.Key_Enter):
+                slot = getattr(self.tx_input, '_packet_send_slot', None)
+                if slot is not None:
+                    slot()
+                return True   # consume — do not insert newline
         if event.type() == QEvent.Type.KeyPress:
             # Walk parent chain: in an app-wide filter obj may be an
             # internal child widget, not the QLineEdit/QTextEdit itself.
@@ -18076,6 +19651,21 @@ class PacketBaseScreen(QWidget):
         )
         action_row.addWidget(self.btn_maildrop)
 
+        # APRS decode toggle — visible only in VHFPacketScreen.
+        # getattr safe default: base class has no APRS_CAPABLE;
+        # VHFPacketScreen sets it True.
+        self.btn_aprs = _no_focus_btn("APRS", BTN_W)
+        self.btn_aprs.setCheckable(True)
+        self.btn_aprs.setStyleSheet(_STYLE_APRS_OFF)
+        self.btn_aprs.setToolTip(
+            "APRS decode mode.\n"
+            "ON: all monitored frames (including already received)\n"
+            "    are decoded into human-readable APRS format.\n"
+            "OFF: restores the original raw monitor display."
+        )
+        action_row.addWidget(self.btn_aprs)
+        self.btn_aprs.setVisible(getattr(self, "APRS_CAPABLE", False))
+
         action_row.addStretch()
 
         lbl_hbaud = QLabel("HBAUD:")
@@ -18191,6 +19781,16 @@ class PacketBaseScreen(QWidget):
             macro_row.addWidget(btn)
             self.macro_buttons.append(btn)
         macro_row.addStretch()
+
+        # Clear TX / Clear RX — emit signals handled by MainWindow.
+        self.btn_clear_tx = _no_focus_btn("Clear TX", BTN_W)
+        self.btn_clear_tx.clicked.connect(self.clear_tx_req.emit)
+        macro_row.addWidget(self.btn_clear_tx)
+
+        self.btn_clear_rx = _no_focus_btn("Clear RX", BTN_W)
+        self.btn_clear_rx.clicked.connect(self.clear_rx_req.emit)
+        macro_row.addWidget(self.btn_clear_rx)
+
         self.btn_edit_macros = _no_focus_btn("Edit Macros", BTN_W + 20)
         self.btn_edit_macros.setStyleSheet(
             "QPushButton { border: 1px solid #666; border-radius: 4px; padding: 4px; }"
@@ -18243,6 +19843,17 @@ class PacketBaseScreen(QWidget):
             self.btn_unproto.setStyleSheet(_STYLE_UNPROTO_OFF)
             self._set_status("STBY")
 
+    def on_aprs_toggled(self, checked: bool) -> None:
+        """Visual feedback for APRS decode toggle.
+
+        Only updates the button appearance — the actual re-decode
+        of the RX buffer is handled by MainWindow._on_packet_aprs_toggled().
+        """
+        if checked:
+            self.btn_aprs.setStyleSheet(_STYLE_APRS_ON)
+        else:
+            self.btn_aprs.setStyleSheet(_STYLE_APRS_OFF)
+
     # ------------------------------------------------------------------
     # Slot: Edit Macros
     # ------------------------------------------------------------------
@@ -18288,6 +19899,7 @@ class VHFPacketScreen(PacketBaseScreen):
     HBAUD_VALUES    = ["1200", "9600"]
     HBAUD_DEFAULT   = "1200"
     MONITOR_DEFAULT = "4"
+    APRS_CAPABLE    = True   # enables APRS decode button
 
 # === src/pk232py/ui/screens/pactor_screen.py ===
 """
@@ -19319,6 +20931,20 @@ class SignalScreen(QWidget):
         )
         root.addWidget(self.rx_log, stretch=1)
 
+        # Clear-RX row — receive-only screen clears itself.
+        clear_row = QHBoxLayout()
+        clear_row.addStretch()
+        self.btn_clear_rx = QPushButton("Clear RX")
+        self.btn_clear_rx.setFixedWidth(BTN_W)
+        self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_rx.clicked.connect(self._on_clear_rx)
+        clear_row.addWidget(self.btn_clear_rx)
+        root.addLayout(clear_row)
+
+    def _on_clear_rx(self) -> None:
+        """Clear the SIAM analysis log (receive-only, local state)."""
+        self.rx_log.clear()
+
     # ------------------------------------------------------------------
     # Analyse-Steuerung
     # ------------------------------------------------------------------
@@ -19696,6 +21322,2165 @@ def style_tx_widget(widget) -> None:
 """Reusable UI widgets (bargraph, LED panel, macro editor)."""
 
 
+# === tools/fax_decoder_test.py ===
+"""
+fax_decoder_test.py — Standalone WEFAX audio decoder test program.
+
+Reads a WAV file containing a WEFAX transmission and decodes it back into
+an image (PNG/BMP/JPG). No TNC, no live audio — pure file processing.
+
+Algorithm credit
+----------------
+The DSP algorithms (FM demodulation, start/stop detection by Fourier
+transform at known frequencies, triangular phasing-line correlation,
+box-average image-line resampling) are ported from the C++ WeatherFax
+plugin for OpenCPN by Sean d'Epagnier:
+
+    https://github.com/seandepagnier/weatherfax_pi
+    File: src/FaxDecoder.cpp  (GPL v3)
+
+Algorithms in turn derive from yahfax / hamfax according to the comment
+in the original source.
+
+Scope & licence (IMPORTANT)
+---------------------------
+This decoder is a STANDALONE TEST TOOL only. It is never imported into,
+integrated with, or shipped as part of pk232py.
+
+In real operation the AEA PK-232MBX performs FAX demodulation in
+hardware and delivers ready-made pixel bytes (Epson ESC L column
+format) to pk232py over Host Mode — pk232py never decodes audio
+itself. This tool exists solely to verify a WEFAX transmission in a
+closed loop (fax_wav_generator.py -> WAV -> this decoder) without any
+TNC, radio or live audio.
+
+Because it is a separate test tool and never linked into the GPL-v2
+application, the GPL-v3 provenance of the ported weatherfax_pi
+algorithms creates no licence conflict with pk232py. If this code were
+ever to be reused inside pk232py (it will not be), the project licence
+would have to be relaxed to "GPL v2 or later".
+
+Architecture
+------------
+    FaxDecoder        — pure DSP class (no Qt)
+                         Input:  numpy float32 audio array + sample rate
+                         Output: PIL.Image grayscale image
+    FaxDecoderWindow  — PyQt6 GUI: WAV picker, parameter selection,
+                         decoder invocation, image preview, save
+
+Dependencies
+------------
+    PyQt6, numpy, Pillow, scipy
+
+WEFAX standard implemented (matches fax_encoder_test.py)
+--------------------------------------------------------
+    Carrier 1900 Hz, deviation ±400 Hz
+    1500 Hz = black, 2300 Hz = white
+    Start tone 300 Hz / 5 s, stop tone 450 Hz / 5 s
+    20+ phasing lines (5% black at line start)
+    Default 120 LPM, IOC 576
+
+Author: Gerhard / OE3GAS — pk232py side project
+License: GPL v3 (inherited from upstream weatherfax_pi)
+"""
+from __future__ import annotations
+
+import math
+import sys
+import wave
+from dataclasses import dataclass
+from enum import Enum
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
+from PyQt6.QtGui import QImage, QPixmap
+from PyQt6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QStatusBar,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+from scipy.signal import lfilter
+
+
+# ---------------------------------------------------------------------------
+# WEFAX constants (must match the encoder)
+# ---------------------------------------------------------------------------
+F_BLACK     = 1500.0     # Hz
+F_WHITE     = 2300.0     # Hz
+F_CARRIER   = 1900.0     # Hz — centre of the FM band (mid-grey)
+F_DEVIATION = 400.0      # Hz — peak deviation (white = +400, black = -400)
+# Discriminator gain factor.
+# A real-input mixer (cos and sin LO, both real) only delivers half the
+# difference-frequency amplitude after the low-pass — the other half goes
+# to the (filtered out) sum frequency. The discriminator output `y` is
+# therefore half of sin(2π·Δf/Fs), so we have to halve the gain when
+# converting back to normalised frequency:  x = (Fs/(F_DEV/2))·asin(y)/2π
+_DISCRIM_GAIN = F_DEVIATION / 2.0
+
+F_START      = 300.0     # Hz — phasing-prelude tone (part of start sequence)
+F_START_TONE = 675.0     # Hz — main start tone
+F_STOP       = 450.0     # Hz — stop tone
+
+# Detection threshold for header tones on the raw audio.
+# Scale-independent: we compare the magnitude of a single Fourier bin
+# against the total RMS of the line. A full-amplitude pure tone gives a
+# bin/RMS ratio close to 1/sqrt(2) ≈ 0.707; per-line sync pulses give
+# ratios well below 0.1. 0.30 is a safe middle ground that works equally
+# well for int16 audio (range ±32000) and float audio (range ±1.0).
+_FT_THRESHOLD_RATIO = 0.30
+_LEEWAY_LINES     = 4     # tolerate this many missed lines in a start/stop run
+_PHASING_LINES    = 20    # number of phasing lines we expect from the encoder
+_PHASING_SKIP     = 2     # discard the first N phasing-position estimates
+
+LPM_OPTIONS = [60, 90, 120, 180, 240]
+IOC_OPTIONS = [288, 576]
+
+
+# ---------------------------------------------------------------------------
+# 17-tap FIR low-pass coefficients from FaxDecoder.cpp
+# ---------------------------------------------------------------------------
+# These are the original integer coefficients; they get normalised below.
+class FilterBandwidth(Enum):
+    NARROW = 0
+    MIDDLE = 1
+    WIDE   = 2
+
+
+_LPF_COEFFS_RAW = {
+    FilterBandwidth.NARROW: np.array(
+        [-7, -18, -15, 11, 56, 116, 177, 223, 240, 223, 177, 116, 56, 11,
+         -15, -18, -7], dtype=np.float64),
+    FilterBandwidth.MIDDLE: np.array(
+        [0, -18, -38, -39, 0, 83, 191, 284, 320, 284, 191, 83, 0, -39, -38,
+         -18, 0], dtype=np.float64),
+    FilterBandwidth.WIDE: np.array(
+        [6, 20, 7, -42, -74, -12, 159, 353, 440, 353, 159, -12, -74, -42,
+         7, 20, 6], dtype=np.float64),
+}
+
+# Pre-normalise: divide by sum so DC gain = 1.
+_LPF_COEFFS = {
+    bw: c / c.sum() for bw, c in _LPF_COEFFS_RAW.items()
+}
+
+
+# ---------------------------------------------------------------------------
+# Header type — matches enum Header in FaxDecoder.h
+# ---------------------------------------------------------------------------
+class LineType(Enum):
+    IMAGE = 0
+    START = 1
+    STOP  = 2
+
+
+# ---------------------------------------------------------------------------
+# Decoder
+# ---------------------------------------------------------------------------
+@dataclass
+class DecodeParams:
+    lpm:       int = 120
+    ioc:       int = 576
+    bandwidth: FilterBandwidth = FilterBandwidth.MIDDLE
+    skip_header_detection: bool = False  # if True: treat whole WAV as image
+
+
+class FaxDecoder:
+    """WEFAX decoder — WAV samples → PIL grayscale image.
+
+    The algorithms are ports from FaxDecoder.cpp (weatherfax_pi).
+
+    Two-pass design
+    ---------------
+    Pass 1: demodulate the entire WAV in one vectorised NumPy operation.
+            Yields a uint8 array `data` of pixel values, one per audio sample.
+
+    Pass 2: walk the demodulated stream line by line:
+            - classify each line as START / STOP / IMAGE
+              (Fourier at 675/450 Hz on the *raw audio*, not on the demod —
+              see _detect_line_type docstring for why)
+            - count consecutive matches to find header runs
+            - run the phasing-line correlator for `_PHASING_LINES` lines
+            - take the median position as horizontal offset
+            - resample remaining IMAGE lines into output pixels
+    """
+
+    def __init__(self, params: DecodeParams) -> None:
+        self.p = params
+        self.target_w = int(round(params.ioc * math.pi / 2))
+
+    # ------------------------------------------------------------------
+    # Pass 1 — FM demodulation
+    # ------------------------------------------------------------------
+    def demodulate_data(
+        self,
+        samples: np.ndarray,
+        sample_rate: int,
+    ) -> np.ndarray:
+        """Demodulate the FM audio into a stream of pixel values.
+
+        This is the NumPy-vectorised port of FaxDecoder::DemodulateData().
+
+        Steps
+        -----
+        1. Mix the audio with a complex local oscillator at F_CARRIER:
+             I(t) = audio(t) * cos(2π·f_c·t)
+             Q(t) = audio(t) * sin(2π·f_c·t)
+        2. Low-pass filter I and Q (17-tap FIR).
+        3. Frequency discriminator using two consecutive (I,Q) samples:
+             y = Q[n-1]·I[n] - I[n-1]·Q[n]   ≈ sin(Δφ)
+             f = sample_rate/(2π·deviation) · arcsin(y)
+           This gives an instantaneous frequency in the range [-1, +1]
+           where -1 = black (1500 Hz) and +1 = white (2300 Hz).
+        4. Map [-1, +1] → [0, 255] for the pixel value.
+
+        Returns
+        -------
+        np.ndarray, dtype=uint8, length = len(samples) - 1
+        """
+        # Normalise audio to ~[-1, +1] (we don't care about absolute level —
+        # the magnitude division below removes amplitude dependence anyway).
+        if samples.dtype != np.float64:
+            audio = samples.astype(np.float64)
+        else:
+            audio = samples
+        if np.issubdtype(samples.dtype, np.integer):
+            audio = audio / 32768.0
+
+        n = len(audio)
+        t = np.arange(n, dtype=np.float64) / sample_rate
+
+        # 1. Mix to baseband.
+        lo_phase = 2.0 * math.pi * F_CARRIER * t
+        i_signal = audio * np.cos(lo_phase)
+        q_signal = audio * np.sin(lo_phase)
+
+        # 2. Low-pass filter both branches (zero state, no padding fuss).
+        coeffs = _LPF_COEFFS[self.p.bandwidth]
+        i_filt = lfilter(coeffs, [1.0], i_signal)
+        q_filt = lfilter(coeffs, [1.0], q_signal)
+
+        # 3. Frequency discriminator.
+        # We need consecutive samples — shift the filtered signals by one.
+        i_now,  q_now  = i_filt[1:],  q_filt[1:]
+        i_prev, q_prev = i_filt[:-1], q_filt[:-1]
+
+        mag = np.sqrt(i_now * i_now + q_now * q_now)
+
+        # Avoid divide-by-zero on silent gaps. Where mag is too small we
+        # write a placeholder pixel = 255 (matches the C++ behaviour).
+        with np.errstate(divide='ignore', invalid='ignore'):
+            i_n = np.where(mag > 1e-12, i_now / mag, 0.0)
+            q_n = np.where(mag > 1e-12, q_now / mag, 0.0)
+
+        # y ≈ sin of phase increment between consecutive normalised samples.
+        y = q_prev * i_n - i_prev * q_n
+        # Clamp |y| ≤ 1 before arcsin (numerical safety).
+        np.clip(y, -1.0, 1.0, out=y)
+
+        # x ∈ [-1, +1] approximately. Conversion factor:
+        # arcsin(y) gives Δφ; instantaneous frequency = Δφ·fs/(2π).
+        # We use the empirically-verified gain (see _DISCRIM_GAIN comment).
+        x = (sample_rate / _DISCRIM_GAIN) * np.arcsin(y) / (2.0 * math.pi)
+
+        # 4. Map to pixel value, with the same clipping as the C++ original.
+        # x = -1 (black) → 0,  x = +1 (white) → 255
+        x_clipped = np.clip(x, -1.0, 1.0)
+        pixels = ((x_clipped / 2.0 + 0.5) * 255.0).astype(np.uint8)
+
+        # Any sample where mag was too small → 255 (white, as per C++).
+        pixels[mag <= 1e-12] = 255
+
+        return pixels
+
+    # ------------------------------------------------------------------
+    # Streaming demodulator — for live audio input
+    # ------------------------------------------------------------------
+    def reset_streaming_state(self, sample_rate: int) -> None:
+        """Initialise / reset the streaming-demod state.
+
+        Must be called once before the first call to `demodulate_block`.
+        Why a separate reset method? The streaming demod needs four
+        persistent pieces of state across audio blocks:
+
+          * sample_count    — global sample index for the LO phase
+                              (without this, the LO would restart every
+                              block and produce demodulation glitches)
+          * lpf_state_i/_q  — internal state of the FIR filter
+                              (lfilter's `zi` parameter)
+          * last_i, last_q  — last filtered I/Q sample of the previous
+                              block, needed by the discriminator
+          * leftover_audio  — at most one stray sample carried into the
+                              next block when a block ends mid-pair
+        """
+        self._stream_fs       = sample_rate
+        self._stream_n        = 0          # global sample counter
+        self._stream_last_i   = 0.0
+        self._stream_last_q   = 0.0
+        self._stream_have_prev = False     # first sample has no predecessor
+
+        # Initial filter state for lfilter: shape = max(len(a), len(b)) - 1
+        coeffs = _LPF_COEFFS[self.p.bandwidth]
+        from scipy.signal import lfilter_zi
+        self._stream_zi_i = np.zeros(len(coeffs) - 1, dtype=np.float64)
+        self._stream_zi_q = np.zeros(len(coeffs) - 1, dtype=np.float64)
+
+    def demodulate_block(self, audio_block: np.ndarray) -> np.ndarray:
+        """Demodulate one block of audio samples, preserving filter state.
+
+        Streaming version of `demodulate_data`. Call `reset_streaming_state`
+        once first, then call this for each incoming block.
+
+        Returns
+        -------
+        np.ndarray, dtype=uint8 — one pixel per input sample (with the
+        very first call returning len-1 pixels since the discriminator
+        needs two samples to start).
+        """
+        # Normalise (same as bulk version).
+        if np.issubdtype(audio_block.dtype, np.integer):
+            audio = audio_block.astype(np.float64) / 32768.0
+        else:
+            audio = audio_block.astype(np.float64)
+
+        n = len(audio)
+        if n == 0:
+            return np.zeros(0, dtype=np.uint8)
+
+        # 1. Mix to baseband. Use the GLOBAL sample index for the LO phase
+        # so the local oscillator stays continuous across block boundaries.
+        idx = np.arange(self._stream_n, self._stream_n + n, dtype=np.float64)
+        lo_phase = 2.0 * math.pi * F_CARRIER * idx / self._stream_fs
+        i_signal = audio * np.cos(lo_phase)
+        q_signal = audio * np.sin(lo_phase)
+        self._stream_n += n
+
+        # 2. Filter — pass the saved zi state, get the new state back.
+        coeffs = _LPF_COEFFS[self.p.bandwidth]
+        i_filt, self._stream_zi_i = lfilter(
+            coeffs, [1.0], i_signal, zi=self._stream_zi_i
+        )
+        q_filt, self._stream_zi_q = lfilter(
+            coeffs, [1.0], q_signal, zi=self._stream_zi_q
+        )
+
+        # 3. Discriminator. The first ever sample has no predecessor, but
+        # for all subsequent calls we use the saved last_i/last_q.
+        if self._stream_have_prev:
+            i_prev_arr = np.concatenate(([self._stream_last_i], i_filt[:-1]))
+            q_prev_arr = np.concatenate(([self._stream_last_q], q_filt[:-1]))
+            i_now_arr  = i_filt
+            q_now_arr  = q_filt
+        else:
+            # First block: drop the first sample, use rest as pairs.
+            i_prev_arr = i_filt[:-1]
+            q_prev_arr = q_filt[:-1]
+            i_now_arr  = i_filt[1:]
+            q_now_arr  = q_filt[1:]
+            self._stream_have_prev = True
+
+        # Save last sample for next call.
+        self._stream_last_i = float(i_filt[-1])
+        self._stream_last_q = float(q_filt[-1])
+
+        # Magnitude normalise.
+        mag = np.sqrt(i_now_arr ** 2 + q_now_arr ** 2)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            i_n = np.where(mag > 1e-12, i_now_arr / mag, 0.0)
+            q_n = np.where(mag > 1e-12, q_now_arr / mag, 0.0)
+
+        y = q_prev_arr * i_n - i_prev_arr * q_n
+        np.clip(y, -1.0, 1.0, out=y)
+        x = (self._stream_fs / _DISCRIM_GAIN) * np.arcsin(y) / (2.0 * math.pi)
+        x_clipped = np.clip(x, -1.0, 1.0)
+        pixels = ((x_clipped / 2.0 + 0.5) * 255.0).astype(np.uint8)
+        pixels[mag <= 1e-12] = 255
+        return pixels
+
+    # ------------------------------------------------------------------
+    # Single-frequency Fourier transform — header detection
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _fourier_at(buffer: np.ndarray, freq: float, sample_rate: int) -> float:
+        """Magnitude of the DFT of `buffer` at `freq` Hz.
+
+        Returns magnitude / N (averaged), so the threshold is independent
+        of the buffer length.
+        """
+        n = len(buffer)
+        k = -2.0 * math.pi * freq / sample_rate
+        idx = np.arange(n, dtype=np.float64)
+        retr = np.dot(buffer, np.cos(k * idx))
+        reti = np.dot(buffer, np.sin(k * idx))
+        return math.sqrt(retr * retr + reti * reti) / n
+
+    def _detect_line_type(
+        self,
+        audio_line: np.ndarray,
+        sample_rate: int,
+        threshold_ratio: float = _FT_THRESHOLD_RATIO,
+        demod_line: np.ndarray | None = None,
+    ) -> LineType:
+        """Classify a single line of *raw audio* as START / STOP / IMAGE.
+
+        Why raw audio rather than the demodulated stream
+        ------------------------------------------------
+        The C++ original performs this Fourier check on the demodulated
+        pixel buffer. That works in practice for off-air recordings
+        because real WEFAX signals carry incidental modulation products
+        that produce energy at the header frequencies even after FM
+        demodulation. For *synthetic* WEFAX (e.g. our own encoder output,
+        which is a clean sine), the demod produces only the second
+        harmonic of the offset frequency from the carrier — there is
+        zero energy at 300/450/675 Hz in the demodulated stream.
+
+        Detecting on the raw audio is more robust, more general, and
+        matches what humans hear: a sustained start tone really is a
+        sustained tone in the audio. Same Fourier algorithm, applied
+        one stage earlier.
+
+        Scale independence
+        ------------------
+        We compare each Fourier-bin magnitude against the line's RMS
+        amplitude. A pure tone fills its bin to ~0.707 of the RMS;
+        sync-pulse fragments give well under 0.1. This makes the
+        decision insensitive to whether `audio_line` is int16-scale
+        (±32000) or float-scale (±1.0).
+
+        Frequencies
+        -----------
+        * Start tone:      F_START_TONE = 675 Hz
+        * Stop tone:       F_STOP       = 450 Hz
+        * Phasing prelude: F_START      = 300 Hz  (treated as part of
+                                                   the start sequence)
+
+        We score 675 and 300 together as "start"; either one for several
+        consecutive lines triggers a START.
+        """
+        # RMS as the scale reference. Avoid divide-by-zero on silence.
+        rms = float(np.sqrt(np.mean(audio_line.astype(np.float64) ** 2)))
+        if rms < 1e-9:
+            return LineType.IMAGE
+
+        m_675 = self._fourier_at(audio_line, F_START_TONE, sample_rate) / rms
+        m_300 = self._fourier_at(audio_line, F_START,      sample_rate) / rms
+        m_450 = self._fourier_at(audio_line, F_STOP,       sample_rate) / rms
+
+        # Keyed-APT start (demod domain).
+        # The standard IOC-576 WEFAX start phase is a black/white alternation
+        # at 300 Hz — NOT a pure 300 Hz audio tone. That alternation is
+        # constant-amplitude FM, so it carries ~zero energy at 300 Hz in the
+        # RAW audio (m_300/m_675 above stay ~0) and the start is missed
+        # entirely — which is exactly why auto-detect produced "No image lines
+        # decoded". After FM demodulation, however, the pixel stream toggles
+        # black<->white 300 times per second, giving a strong 300 Hz
+        # component. We therefore also test the demodulated line at the APT
+        # keying rate when it is supplied. (Measured: ~0.42 on APT-start lines
+        # vs <0.04 on image/phasing lines — a wide, safe margin vs the 0.30
+        # threshold across all three test images, vertical-line pattern incl.)
+        if demod_line is not None and len(demod_line) > 1:
+            d = demod_line.astype(np.float64)
+            d_rms = float(np.sqrt(np.mean(d ** 2)))
+            if d_rms > 1e-9:
+                m_key = self._fourier_at(d, F_START, sample_rate) / d_rms
+                if m_key > threshold_ratio:
+                    return LineType.START
+
+        if m_675 > threshold_ratio or m_300 > threshold_ratio:
+            return LineType.START
+        if m_450 > threshold_ratio:
+            return LineType.STOP
+        return LineType.IMAGE
+
+    # ------------------------------------------------------------------
+    # Phasing-line correlator
+    # ------------------------------------------------------------------
+    def _phasing_position(self, line: np.ndarray, image_width: int) -> int:
+        """Find the most likely position of the 5%-black phasing pulse
+        in `line`. Returns an integer offset in [0, image_width).
+
+        Port of FaxPhasingLinePosition() — exact algorithm preserved.
+
+        The original convolves with a triangular kernel weighted by
+        `(255 - pixel)` and takes the position of the global minimum.
+
+        Why minimum? `total` accumulates  (triangle_weight * inverted_pixel).
+        Black pixels (image[i]=0) become 255 after inversion — and are
+        weighted positively. So `total` is *largest* where the black wedge
+        sits in the middle. The C++ comparison `total < mintotal` looks
+        wrong on first read, but matches the comment "find position it
+        fits to the minimum" because the weighted sum is treated as a
+        cost. We replicate that logic verbatim.
+
+        NOTE
+        ----
+        This differs from the original by sub-sampling the line down to
+        `image_width` first. The original assumes the buffer is already
+        at image-width resolution (it's called after DecodeImageLine in
+        the data flow — but actually fed the raw demod buffer in the
+        weatherfax_pi code path). To get sub-sample-accurate phasing
+        we'd want to keep the high resolution; for this port we resample
+        to image_width first via box averaging in `_decode_image_line`,
+        then run phasing on that.
+        """
+        n = max(int(image_width * 0.07), 4)  # 7% wide search window
+        half = n // 2
+
+        # Triangle weights, peak in the middle: 0,1,2,...,half,...,2,1,0
+        # The C++ form:  (n/2 - abs(j - n/2))
+        j = np.arange(n)
+        triangle = (half - np.abs(j - half)).astype(np.float64)
+        # Inverted, centred line: black=255, white=0
+        inverted = 255.0 - line.astype(np.float64)
+
+        # For each candidate start position i, sum triangle * inverted[i:i+n]
+        # using wraparound. Implemented as a circular convolution via FFT.
+        # With image_width ≈ 905 and n ≈ 63 this is plenty fast even direct.
+        # We do the direct loop here to match the C++ semantics one-to-one.
+        # (For very wide images this could be replaced by np.correlate.)
+        totals = np.zeros(image_width, dtype=np.float64)
+        # Build a length-image_width kernel: triangle in first n slots, zero else.
+        kernel = np.zeros(image_width, dtype=np.float64)
+        kernel[:n] = triangle
+        # Circular convolution: totals[i] = sum_j inverted[(i+j) % W] * kernel[j]
+        # Equivalent to ifft(fft(inverted) * fft(kernel[::-1])) but simpler
+        # to express as direct correlation with wraparound:
+        ext = np.concatenate([inverted, inverted[:n]])  # tile by n samples
+        for i in range(image_width):
+            totals[i] = np.dot(ext[i:i + n], triangle)
+
+        # Find where the (inverted) line correlates maximally with the
+        # triangular kernel — this is where the *black* wedge sits.
+        #
+        # NOTE: the C++ original uses argmin, which corresponds to the
+        # *whitest* position. The original docstring describes finding
+        # the black wedge ("^ shaped wedge"), so the C++ has a sign
+        # inconsistency that happens to land on the opposite side of the
+        # line. For deterministic synthetic input we want to find the
+        # actual black wedge, hence argmax.
+        max_pos = int(np.argmax(totals))
+        return (max_pos + half) % image_width
+
+    # ------------------------------------------------------------------
+    # Pass 2 — image-line resampler
+    # ------------------------------------------------------------------
+    def _decode_image_line(
+        self,
+        line_buffer: np.ndarray,
+    ) -> np.ndarray:
+        """Box-average a single line of demod samples down to image_width pixels.
+
+        Port of DecodeImageLine() (single-colour case).
+        """
+        n = len(line_buffer)
+        out = np.zeros(self.target_w, dtype=np.uint8)
+        # Same per-pixel bin edges as the encoder uses on the way out.
+        edges = np.linspace(0, n, self.target_w + 1, dtype=np.int64)
+        for i in range(self.target_w):
+            a, b = edges[i], edges[i + 1]
+            if b > a:
+                out[i] = int(np.mean(line_buffer[a:b]))
+            else:
+                out[i] = 0
+        return out
+
+    # ------------------------------------------------------------------
+    # Top-level entry point
+    # ------------------------------------------------------------------
+    def decode_wav(
+        self,
+        wav_path: Path,
+        progress_cb=None,
+    ) -> tuple[Image.Image, dict]:
+        """Read WAV, demodulate, decode into a PIL grayscale image.
+
+        Returns (image, info) where info has:
+            sample_rate, audio_samples, demod_samples, samples_per_line,
+            image_width, image_height, lpm, ioc,
+            start_line, stop_line, phasing_offset, header_skipped
+        """
+        # --- Load WAV --------------------------------------------------
+        with wave.open(str(wav_path), 'rb') as wf:
+            n_channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+            sample_rate = wf.getframerate()
+            n_frames = wf.getnframes()
+            raw = wf.readframes(n_frames)
+
+        if sample_width == 2:
+            samples = np.frombuffer(raw, dtype=np.int16)
+        elif sample_width == 1:
+            # 8-bit unsigned PCM in WAV: bias 128.
+            samples = (np.frombuffer(raw, dtype=np.uint8).astype(np.int16) - 128) << 8
+        else:
+            raise ValueError(f"Unsupported sample width: {sample_width}")
+
+        if n_channels > 1:
+            # Average channels → mono.
+            samples = samples.reshape(-1, n_channels).mean(axis=1).astype(np.int16)
+
+        # --- Pass 1: demodulate ---------------------------------------
+        if progress_cb:
+            progress_cb("Demodulating", 0, 100)
+        pixels = self.demodulate_data(samples, sample_rate)
+
+        # --- Pass 2: line-by-line walk --------------------------------
+        # FRACTIONAL line length: at 11025 Hz / 120 LPM the true line is
+        # 5512.5 samples. Rounding to a fixed integer and reshaping drops
+        # 0.5 sample per line, which accumulates into a visible slant
+        # (parallelogram) over the image — and would do so for ANY real
+        # WEFAX whose line length is non-integer in samples. We therefore
+        # compute each line's start/end as round(idx * spl_float) so the
+        # line length self-corrects (alternating 5512/5513), exactly
+        # mirroring the encoder's fractional-position approach.
+        spl_float = sample_rate * 60.0 / self.p.lpm        # e.g. 5512.5
+        samples_per_line = int(round(spl_float))           # nominal, for info dict
+        n_lines_total = int(len(pixels) // spl_float)
+
+        # The audio array is aligned to the demod stream (the discriminator
+        # consumes pairs); both are indexed by the same fractional bounds.
+        audio_for_lines = samples[:len(pixels)].astype(np.float64)
+
+        def _line_bounds(idx: int) -> tuple[int, int]:
+            """Fractional [start, end) sample bounds for image line idx."""
+            a = int(round(idx * spl_float))
+            b = int(round((idx + 1) * spl_float))
+            return a, b
+
+        def _demod_line(idx: int) -> np.ndarray:
+            a, b = _line_bounds(idx)
+            return pixels[a:b]
+
+        def _audio_line(idx: int) -> np.ndarray:
+            a, b = _line_bounds(idx)
+            return audio_for_lines[a:b]
+
+        # --- Header detection -----------------------------------------
+        # Walk lines; find a START run, then phasing, then collect IMAGE
+        # lines until a STOP run.
+        start_line   = None
+        stop_line    = None
+        phasing_off  = 0
+        gotstart     = False
+        last_type    = LineType.IMAGE
+        type_count   = 0
+
+        # State for phasing: we collect positions while phasing_left > 0
+        # and become "in image" once it hits zero.
+        phasing_left  = 0
+        phasing_pos   = []
+
+        # Required run length for a header — leeway as in the C++.
+        required_run = max(int(5 * self.p.lpm / 60.0) - _LEEWAY_LINES, 1)
+
+        # Output image: dynamic list of lines, finalised after the loop.
+        image_lines: list[np.ndarray] = []
+
+        if self.p.skip_header_detection:
+            # Treat every line as image data; no phasing.
+            gotstart = True
+            phasing_left = 0
+            start_line = 0
+
+        for idx in range(n_lines_total):
+            line_demod = _demod_line(idx)
+            line_audio = _audio_line(idx)
+
+            if progress_cb and idx % 20 == 0:
+                progress_cb("Decoding lines", idx, n_lines_total)
+
+            # --- 1. Classify (on raw audio, not demod) ---------------
+            if self.p.skip_header_detection:
+                line_type = LineType.IMAGE
+            else:
+                line_type = self._detect_line_type(
+                    line_audio, sample_rate, _FT_THRESHOLD_RATIO,
+                    demod_line=line_demod,
+                )
+
+            # --- 2. Run-length tracking (tolerant) --------------------
+            # The original logic decremented type_count on EVERY line that
+            # didn't continue the run, so a single misclassified line inside
+            # a short APT start tone (10 lines @ 120 LPM) kept the count from
+            # ever reaching required_run → "No image lines decoded".
+            # Tolerant version: IMAGE lines are tolerated (they neither grow
+            # nor reset a header run), repeated lines of the SAME header type
+            # accumulate, and only a DIFFERENT header type restarts the run.
+            # last_type therefore holds the header type currently being
+            # accumulated (never IMAGE once a run has started).
+            if line_type == LineType.IMAGE:
+                pass                          # tolerate gap; hold the run
+            elif line_type == last_type:
+                type_count += 1               # same header type → grow run
+            else:
+                last_type = line_type         # different header → restart run
+                type_count = 1
+
+            # --- 3. Header transitions --------------------------------
+            if line_type != LineType.IMAGE and type_count == required_run:
+                if line_type == LineType.START:
+                    start_line   = idx
+                    gotstart     = True
+                    phasing_left = _PHASING_LINES
+                    phasing_pos  = []
+                    image_lines.clear()
+                elif line_type == LineType.STOP and gotstart:
+                    stop_line = idx
+                    break
+
+            # --- 4. Image / phasing accumulation ----------------------
+            if line_type == LineType.IMAGE and gotstart:
+                if phasing_left > 0:
+                    # Phasing line: estimate offset (skip the first 2 noisy ones).
+                    if phasing_left <= _PHASING_LINES - _PHASING_SKIP:
+                        # First resample to image_width, then run correlator.
+                        line_img = self._decode_image_line(line_demod)
+                        phasing_pos.append(
+                            self._phasing_position(line_img, self.target_w)
+                        )
+                    phasing_left -= 1
+                    if phasing_left == 0:
+                        # Take the median for robustness against outliers.
+                        if phasing_pos:
+                            phasing_off = int(np.median(phasing_pos))
+                else:
+                    # Real image line — resample and append, with horizontal shift.
+                    line_img = self._decode_image_line(line_demod)
+                    if phasing_off:
+                        line_img = np.roll(line_img, -phasing_off)
+                    image_lines.append(line_img)
+
+        if progress_cb:
+            progress_cb("Decoding lines", n_lines_total, n_lines_total)
+
+        # --- Assemble output image ------------------------------------
+        if not image_lines:
+            raise RuntimeError(
+                "No image lines decoded. Try 'skip header detection', or "
+                "check LPM/IOC settings, or verify the WAV contains WEFAX."
+            )
+
+        img_array = np.stack(image_lines, axis=0)
+        img = Image.fromarray(img_array, mode='L')
+
+        info = {
+            'sample_rate':       sample_rate,
+            'audio_samples':     len(samples),
+            'demod_samples':     len(pixels),
+            'samples_per_line':  samples_per_line,
+            'lines_total':       n_lines_total,
+            'image_width':       self.target_w,
+            'image_height':      img.height,
+            'lpm':               self.p.lpm,
+            'ioc':               self.p.ioc,
+            'start_line':        start_line,
+            'stop_line':         stop_line,
+            'phasing_offset':    phasing_off,
+            'header_skipped':    self.p.skip_header_detection,
+        }
+        return img, info
+
+
+# ---------------------------------------------------------------------------
+# Worker thread
+# ---------------------------------------------------------------------------
+class DecodeWorker(QThread):
+    progress    = pyqtSignal(str, int, int)   # label, current, total
+    finished_ok = pyqtSignal(object, dict)    # PIL Image, info
+    failed      = pyqtSignal(str)
+
+    def __init__(self, wav_path: Path, params: DecodeParams) -> None:
+        super().__init__()
+        self._wav_path = wav_path
+        self._params   = params
+
+    def run(self) -> None:
+        try:
+            decoder = FaxDecoder(self._params)
+            img, info = decoder.decode_wav(
+                self._wav_path,
+                progress_cb=lambda lbl, c, t: self.progress.emit(lbl, c, t),
+            )
+            self.finished_ok.emit(img, info)
+        except Exception as exc:
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Live decode worker — receives audio from a sound card via PortAudio
+# ---------------------------------------------------------------------------
+class LiveDecodeWorker(QThread):
+    """Continuous live decoder thread.
+
+    Lifecycle
+    ---------
+    1. GUI calls `start()` on the thread. We open the sound-card stream.
+    2. Audio blocks arrive on the sound-card thread → put into `_audio_q`.
+    3. `run()` pulls blocks from `_audio_q`, demodulates, slices into
+       lines, classifies, and emits signals to the GUI.
+    4. GUI calls `request_stop()` (sets `_stop_flag`) to end recording.
+    5. We close the stream and exit.
+
+    Modes
+    -----
+    The thread is *always* listening once started. Whether it actually
+    accumulates an image depends on:
+        * `auto_start` — True: start on detected START tone
+                         False: ignore START tones, wait for manual_start()
+        * Manual control via `manual_start()` and `manual_stop_image()`
+
+    A thirty-second rolling audio buffer is kept while waiting. When an
+    image starts, that buffer is preserved as the leading audio so the
+    saved WAV captures the start tone too.
+    """
+
+    # Lifecycle signals
+    started_listening = pyqtSignal(int)             # sample_rate
+    stopped           = pyqtSignal()
+    failed            = pyqtSignal(str)
+
+    # Per-block status for the level meter / status bar
+    audio_level       = pyqtSignal(float)           # 0..1 RMS
+    line_decoded      = pyqtSignal(int, object)     # line_idx, ndarray
+
+    # Per-image lifecycle
+    image_started     = pyqtSignal(str)             # reason ("auto"/"manual")
+    image_finished    = pyqtSignal(
+        object,                                     # PIL.Image.Image
+        dict,                                       # info dict
+        bytes,                                      # WAV bytes
+    )
+
+    def __init__(
+        self,
+        params: DecodeParams,
+        device_index: int | None = None,
+        sample_rate: int = 11025,
+        auto_start: bool = True,
+    ) -> None:
+        super().__init__()
+        self._params       = params
+        self._device_index = device_index
+        self._sample_rate  = sample_rate
+        self._auto_start   = auto_start
+
+        self._stop_flag      = False
+        self._manual_start   = False
+        self._manual_stop    = False
+
+        # Block-arrival queue. The audio thread pushes; we pop.
+        # Use a simple list with a lock — sounddevice uses small blocks
+        # at audio rate, GIL handling is fine for our throughput.
+        from collections import deque
+        from threading import Lock
+        self._audio_q     = deque()
+        self._q_lock      = Lock()
+
+    # ---- Public control API -------------------------------------------
+    def request_stop(self) -> None:
+        """Tell the worker to shut down after current block."""
+        self._stop_flag = True
+
+    def manual_start(self) -> None:
+        """User pressed 'Start image now' — begin recording immediately."""
+        self._manual_start = True
+
+    def manual_stop_image(self) -> None:
+        """User pressed 'Stop image' — finish current image now."""
+        self._manual_stop = True
+
+    def set_auto_start(self, enabled: bool) -> None:
+        """Toggle auto-start at runtime."""
+        self._auto_start = enabled
+
+    # ---- Worker body ---------------------------------------------------
+    def run(self) -> None:
+        try:
+            import sounddevice as sd
+        except (ImportError, OSError) as exc:
+            self.failed.emit(f"sounddevice/PortAudio not available: {exc}")
+            return
+
+        try:
+            self._run_loop(sd)
+        except Exception as exc:
+            self.failed.emit(f"{type(exc).__name__}: {exc}")
+        finally:
+            self.stopped.emit()
+
+    def _run_loop(self, sd) -> None:
+        """The actual decoding loop, separated for readability."""
+        # ---- Open input stream ---------------------------------------
+        # sounddevice callback runs on a private audio thread.
+        # We push raw blocks into our queue; the worker thread does the
+        # actual DSP. This keeps the audio callback fast and bounded.
+        def _audio_callback(indata, frames, time_info, status):
+            if status:
+                # underrun/overflow — note but don't fail
+                pass
+            with self._q_lock:
+                # Make a copy: indata is a temporary buffer.
+                self._audio_q.append(indata[:, 0].copy())
+
+        block_size = 2048   # ~185 ms @ 11025 Hz — small enough for low latency
+        stream = sd.InputStream(
+            samplerate=self._sample_rate,
+            channels=1,
+            dtype='float32',
+            blocksize=block_size,
+            device=self._device_index,
+            callback=_audio_callback,
+        )
+
+        # ---- Per-decoder state ---------------------------------------
+        decoder = FaxDecoder(self._params)
+        decoder.reset_streaming_state(self._sample_rate)
+        spl = int(round(self._sample_rate * 60.0 / self._params.lpm))
+
+        # Accumulators across audio blocks:
+        #   pending_pixels — demodulated samples not yet sliced into lines
+        #   pending_audio  — raw audio not yet sliced into lines (for header detection)
+        pending_pixels = np.zeros(0, dtype=np.uint8)
+        pending_audio  = np.zeros(0, dtype=np.float32)
+
+        # Rolling pre-image audio buffer (for WAV save). Holds the most
+        # recent ~30 s; gets prepended to the image audio when capture begins.
+        rolling_seconds = 30
+        rolling_max = rolling_seconds * self._sample_rate
+        rolling_audio = np.zeros(0, dtype=np.float32)
+
+        # Image-recording state
+        capturing      = False
+        image_audio    = np.zeros(0, dtype=np.float32)   # full audio for WAV
+        image_lines    = []                              # decoded pixel rows
+        line_idx_in_img = 0
+        last_type      = LineType.IMAGE
+        type_count     = 0
+        gotstart       = False
+        phasing_left   = 0
+        phasing_pos    = []
+        phasing_off    = 0
+        required_run   = max(int(5 * self._params.lpm / 60.0) - _LEEWAY_LINES, 1)
+
+        # ---- Start the audio stream ----------------------------------
+        with stream:
+            self.started_listening.emit(self._sample_rate)
+
+            import time
+            while not self._stop_flag:
+                # Pull all currently-queued blocks.
+                with self._q_lock:
+                    if not self._audio_q:
+                        block = None
+                    else:
+                        block = np.concatenate(list(self._audio_q))
+                        self._audio_q.clear()
+
+                if block is None:
+                    time.sleep(0.02)
+                    continue
+
+                # Demod & accumulate.
+                new_pixels = decoder.demodulate_block(block)
+                pending_pixels = np.concatenate([pending_pixels, new_pixels])
+                # NOTE: pixels has len(block) on subsequent calls but
+                # len(block)-1 on the first call (discriminator pair).
+                # To keep audio aligned with pixels we drop the first sample
+                # of the very first block. This is a one-time event.
+                if len(pending_audio) == 0 and len(new_pixels) == len(block) - 1:
+                    pending_audio = block[1:].astype(np.float32)
+                else:
+                    pending_audio = np.concatenate([pending_audio, block.astype(np.float32)])
+
+                # Update rolling audio buffer.
+                rolling_audio = np.concatenate([rolling_audio, block.astype(np.float32)])
+                if len(rolling_audio) > rolling_max:
+                    rolling_audio = rolling_audio[-rolling_max:]
+
+                # Audio-level indicator (RMS of this block).
+                rms = float(np.sqrt(np.mean(block.astype(np.float64) ** 2)))
+                self.audio_level.emit(rms)
+
+                # ---- Slice complete lines from accumulators ----------
+                while len(pending_pixels) >= spl and len(pending_audio) >= spl:
+                    line_demod = pending_pixels[:spl]
+                    line_audio = pending_audio[:spl].astype(np.float64)
+                    pending_pixels = pending_pixels[spl:]
+                    pending_audio  = pending_audio[spl:]
+
+                    # Always classify so we can react to START even when
+                    # not actively capturing. Pass the demod line too so the
+                    # keyed-APT (300 Hz black/white) start is detectable here
+                    # as well — same fix as decode_wav.
+                    line_type = decoder._detect_line_type(
+                        line_audio, self._sample_rate, _FT_THRESHOLD_RATIO,
+                        demod_line=line_demod,
+                    )
+
+                    # Run-length tracking (same as decode_wav).
+                    if line_type == last_type and line_type != LineType.IMAGE:
+                        type_count += 1
+                    else:
+                        type_count = max(type_count - 1, 0)
+                    last_type = line_type
+
+                    # ---- Manual start trigger ------------------------
+                    if self._manual_start and not capturing:
+                        self._manual_start = False
+                        capturing = True
+                        gotstart = True
+                        phasing_left = 0       # no phasing — user said go
+                        phasing_pos = []
+                        phasing_off = 0
+                        line_idx_in_img = 0
+                        image_lines = []
+                        # Save the pre-recorded rolling buffer as the lead-in.
+                        image_audio = rolling_audio.copy()
+                        self.image_started.emit("manual")
+
+                    # ---- Auto start on detected START tone -----------
+                    if (self._auto_start
+                            and not capturing
+                            and line_type == LineType.START
+                            and type_count == required_run):
+                        capturing = True
+                        gotstart = True
+                        phasing_left = _PHASING_LINES
+                        phasing_pos = []
+                        phasing_off = 0
+                        line_idx_in_img = 0
+                        image_lines = []
+                        image_audio = rolling_audio.copy()
+                        self.image_started.emit("auto")
+
+                    # ---- If capturing, record audio and process line --
+                    if capturing:
+                        # Append this line's audio to the image WAV buffer.
+                        image_audio = np.concatenate(
+                            [image_audio, line_audio.astype(np.float32)]
+                        )
+
+                        # Manual stop?
+                        if self._manual_stop:
+                            self._manual_stop = False
+                            self._finalise_image(
+                                image_lines, image_audio,
+                                phasing_off, "manual_stop",
+                            )
+                            capturing = False
+                            gotstart = False
+                            continue
+
+                        # Auto stop on STOP tone.
+                        if (line_type == LineType.STOP
+                                and type_count == required_run
+                                and gotstart):
+                            self._finalise_image(
+                                image_lines, image_audio,
+                                phasing_off, "stop_tone",
+                            )
+                            capturing = False
+                            gotstart = False
+                            type_count = 0
+                            continue
+
+                        # Phasing / image accumulation.
+                        if line_type == LineType.IMAGE and gotstart:
+                            if phasing_left > 0:
+                                if phasing_left <= _PHASING_LINES - _PHASING_SKIP:
+                                    line_img = decoder._decode_image_line(line_demod)
+                                    phasing_pos.append(
+                                        decoder._phasing_position(line_img, decoder.target_w)
+                                    )
+                                phasing_left -= 1
+                                if phasing_left == 0 and phasing_pos:
+                                    phasing_off = int(np.median(phasing_pos))
+                            else:
+                                line_img = decoder._decode_image_line(line_demod)
+                                if phasing_off:
+                                    line_img = np.roll(line_img, -phasing_off)
+                                image_lines.append(line_img)
+                                self.line_decoded.emit(line_idx_in_img, line_img)
+                                line_idx_in_img += 1
+
+    def _finalise_image(
+        self,
+        image_lines: list,
+        image_audio: np.ndarray,
+        phasing_off: int,
+        reason: str,
+    ) -> None:
+        """Convert the accumulated lines into a PIL image and emit."""
+        if not image_lines:
+            return
+
+        img_array = np.stack(image_lines, axis=0)
+        img = Image.fromarray(img_array, mode='L')
+
+        # Build WAV bytes from the audio buffer.
+        # Use the shared writer (in-memory).
+        import io
+        buf = io.BytesIO()
+        peak = max(float(np.max(np.abs(image_audio))), 1e-9)
+        scale = 0.95 * 32767 / peak
+        audio_i16 = np.clip(image_audio * scale, -32768, 32767).astype(np.int16)
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(self._sample_rate)
+            wf.writeframes(audio_i16.tobytes())
+        wav_bytes = buf.getvalue()
+
+        info = {
+            'sample_rate':    self._sample_rate,
+            'image_width':    img.width,
+            'image_height':   img.height,
+            'lpm':            self._params.lpm,
+            'ioc':            self._params.ioc,
+            'phasing_offset': phasing_off,
+            'finish_reason':  reason,
+            'audio_samples':  len(image_audio),
+            'audio_seconds':  len(image_audio) / self._sample_rate,
+        }
+        self.image_finished.emit(img, info, wav_bytes)
+
+
+# ---------------------------------------------------------------------------
+# GUI — tabbed: WAV file decoder + Live audio decoder
+# ---------------------------------------------------------------------------
+class FaxDecoderWindow(QMainWindow):
+    """Main decoder window with two tabs:
+        * "From WAV file" — original offline decoder
+        * "Live audio"     — PortAudio capture + streaming decode
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle("WEFAX Decoder Test (OE3GAS)")
+        self.resize(720, 720)
+
+        # State for WAV-file tab
+        self._wav_path: Path | None = None
+        self._image:    Image.Image | None = None
+        self._info:     dict | None = None
+        self._worker:   DecodeWorker | None = None
+
+        # State for live-audio tab
+        self._live_worker:   LiveDecodeWorker | None = None
+        self._live_image:    Image.Image | None = None
+        self._live_buffer:   np.ndarray | None = None     # growing line buffer
+        self._live_target_w: int = 0
+
+        # ----- Tabs -----
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_wav_tab(), "From WAV file")
+        self.tabs.addTab(self._build_live_tab(), "Live audio")
+        self.setCentralWidget(self.tabs)
+        self.setStatusBar(QStatusBar())
+
+    # ==================================================================
+    # WAV file tab
+    # ==================================================================
+    def _build_wav_tab(self) -> QWidget:
+        self.btn_open = QPushButton("Open WAV…")
+        self.lbl_path = QLabel("(no WAV loaded)")
+
+        self.cb_lpm = QComboBox()
+        for v in LPM_OPTIONS:
+            self.cb_lpm.addItem(f"{v} LPM", v)
+        self.cb_lpm.setCurrentText("120 LPM")
+
+        self.cb_ioc = QComboBox()
+        for v in IOC_OPTIONS:
+            self.cb_ioc.addItem(f"IOC {v}", v)
+        self.cb_ioc.setCurrentText("IOC 576")
+
+        self.cb_bw = QComboBox()
+        self.cb_bw.addItem("Narrow", FilterBandwidth.NARROW)
+        self.cb_bw.addItem("Middle", FilterBandwidth.MIDDLE)
+        self.cb_bw.addItem("Wide",   FilterBandwidth.WIDE)
+        self.cb_bw.setCurrentText("Middle")
+
+        self.cb_skip = QComboBox()
+        self.cb_skip.addItem("Auto-detect headers", False)
+        self.cb_skip.addItem("Skip header detection (whole WAV is image)", True)
+
+        self.btn_decode = QPushButton("Decode")
+        self.btn_decode.setEnabled(False)
+        self.btn_save   = QPushButton("Save Image…")
+        self.btn_save.setEnabled(False)
+        self.progress   = QProgressBar()
+        self.progress.setVisible(False)
+
+        self.lbl_image = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.lbl_image.setMinimumHeight(280)
+        self.lbl_image.setStyleSheet("border: 1px solid #888;")
+        self.lbl_info = QLabel("")
+        self.lbl_info.setWordWrap(True)
+        self.lbl_info.setStyleSheet("color: #444;")
+
+        form = QFormLayout()
+        form.addRow("LPM:",       self.cb_lpm)
+        form.addRow("IOC:",       self.cb_ioc)
+        form.addRow("Bandwidth:", self.cb_bw)
+        form.addRow("Mode:",      self.cb_skip)
+
+        top = QHBoxLayout()
+        top.addWidget(self.btn_open)
+        top.addWidget(self.lbl_path, 1)
+        bottom = QHBoxLayout()
+        bottom.addWidget(self.btn_decode)
+        bottom.addWidget(self.btn_save)
+
+        root = QVBoxLayout()
+        root.addLayout(top)
+        root.addLayout(form)
+        root.addLayout(bottom)
+        root.addWidget(self.progress)
+        root.addWidget(self.lbl_image, 1)
+        root.addWidget(self.lbl_info)
+
+        page = QWidget()
+        page.setLayout(root)
+
+        self.btn_open.clicked.connect(self._on_open)
+        self.btn_decode.clicked.connect(self._on_decode)
+        self.btn_save.clicked.connect(self._on_save)
+        return page
+
+    def _on_open(self) -> None:
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "Open WAV", "", "WAV (*.wav);;All files (*)"
+        )
+        if not path_str:
+            return
+        self._wav_path = Path(path_str)
+        self.lbl_path.setText(self._wav_path.name)
+        self.btn_decode.setEnabled(True)
+        self.btn_save.setEnabled(False)
+        self.lbl_image.clear()
+        self.lbl_info.clear()
+
+    def _on_decode(self) -> None:
+        if self._wav_path is None:
+            return
+
+        params = DecodeParams(
+            lpm=self.cb_lpm.currentData(),
+            ioc=self.cb_ioc.currentData(),
+            bandwidth=self.cb_bw.currentData(),
+            skip_header_detection=self.cb_skip.currentData(),
+        )
+
+        self.btn_decode.setEnabled(False)
+        self.btn_open.setEnabled(False)
+        self.btn_save.setEnabled(False)
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
+        self.statusBar().showMessage("Decoding…")
+
+        self._worker = DecodeWorker(self._wav_path, params)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.finished_ok.connect(self._on_decode_ok)
+        self._worker.failed.connect(self._on_decode_failed)
+        self._worker.start()
+
+    def _on_progress(self, label: str, cur: int, total: int) -> None:
+        if total > 0:
+            self.progress.setValue(int(100 * cur / total))
+        self.statusBar().showMessage(f"{label} {cur}/{total}")
+
+    def _on_decode_ok(self, img: Image.Image, info: dict) -> None:
+        self._image = img
+        self._info  = info
+        self._show_pixmap(self.lbl_image, img)
+        self.lbl_info.setText(
+            f"Decoded: {info['image_width']}x{info['image_height']} px  -  "
+            f"Start line: {info['start_line']}  -  Stop line: {info['stop_line']}  "
+            f"-  Phasing offset: {info['phasing_offset']} px  -  "
+            f"Audio: {info['audio_samples']/info['sample_rate']:.1f} s "
+            f"@ {info['sample_rate']} Hz"
+        )
+        self._reset_wav_buttons()
+        self.btn_save.setEnabled(True)
+        self.statusBar().showMessage("Decoded - choose Save Image to write a file", 5000)
+
+    def _on_decode_failed(self, msg: str) -> None:
+        QMessageBox.critical(self, "Decoding failed", msg)
+        self.statusBar().showMessage("Failed", 3000)
+        self._reset_wav_buttons()
+
+    def _on_save(self) -> None:
+        if self._image is None:
+            return
+        default = (self._wav_path.with_suffix('.png')
+                   if self._wav_path else Path("fax_decoded.png"))
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "Save image", str(default),
+            "PNG (*.png);;BMP (*.bmp);;JPEG (*.jpg)"
+        )
+        if not path_str:
+            return
+        try:
+            self._image.save(path_str)
+            self.statusBar().showMessage(f"Saved -> {path_str}", 5000)
+        except Exception as exc:
+            QMessageBox.critical(self, "Save failed", str(exc))
+
+    def _reset_wav_buttons(self) -> None:
+        self.progress.setVisible(False)
+        self.btn_decode.setEnabled(self._wav_path is not None)
+        self.btn_open.setEnabled(True)
+
+    # ==================================================================
+    # Live audio tab
+    # ==================================================================
+    def _build_live_tab(self) -> QWidget:
+        # --- Device picker ---
+        self.cb_device = QComboBox()
+        self.btn_refresh_devices = QPushButton("Refresh")
+        self.btn_refresh_devices.clicked.connect(self._refresh_devices)
+
+        # --- Decoder parameters (separate from WAV tab so the user can
+        # configure them independently) ---
+        self.cb_lpm_live = QComboBox()
+        for v in LPM_OPTIONS:
+            self.cb_lpm_live.addItem(f"{v} LPM", v)
+        self.cb_lpm_live.setCurrentText("120 LPM")
+        self.cb_ioc_live = QComboBox()
+        for v in IOC_OPTIONS:
+            self.cb_ioc_live.addItem(f"IOC {v}", v)
+        self.cb_ioc_live.setCurrentText("IOC 576")
+        self.cb_bw_live = QComboBox()
+        self.cb_bw_live.addItem("Narrow", FilterBandwidth.NARROW)
+        self.cb_bw_live.addItem("Middle", FilterBandwidth.MIDDLE)
+        self.cb_bw_live.addItem("Wide",   FilterBandwidth.WIDE)
+        self.cb_bw_live.setCurrentText("Middle")
+
+        # --- Auto-start checkbox ---
+        self.chk_auto_start = QCheckBox(
+            "Auto-start on detected START tone"
+        )
+        self.chk_auto_start.setChecked(True)
+        self.chk_auto_start.toggled.connect(self._on_auto_start_toggled)
+
+        # --- Output folder for saved images and WAVs ---
+        self.lbl_outdir = QLabel(str(Path.home() / "wefax_captures"))
+        self.btn_outdir = QPushButton("Choose folder...")
+        self.btn_outdir.clicked.connect(self._on_choose_outdir)
+
+        # --- Listening / capture controls ---
+        self.btn_listen   = QPushButton("Start listening")
+        self.btn_listen.clicked.connect(self._on_listen_toggle)
+        self.btn_manual_start = QPushButton("Start image now")
+        self.btn_manual_start.setEnabled(False)
+        self.btn_manual_start.clicked.connect(self._on_manual_start)
+        self.btn_manual_stop  = QPushButton("Stop image")
+        self.btn_manual_stop.setEnabled(False)
+        self.btn_manual_stop.clicked.connect(self._on_manual_stop)
+
+        # --- Audio level bar ---
+        self.lvl_bar = QProgressBar()
+        self.lvl_bar.setRange(0, 100)
+        self.lvl_bar.setTextVisible(False)
+        self.lvl_bar.setMaximumHeight(8)
+
+        # --- Live image display ---
+        self.lbl_live_image = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self.lbl_live_image.setMinimumHeight(320)
+        self.lbl_live_image.setStyleSheet("border: 1px solid #888;")
+
+        self.lbl_live_info = QLabel("Idle.")
+        self.lbl_live_info.setWordWrap(True)
+        self.lbl_live_info.setStyleSheet("color: #444;")
+
+        # --- Layout ---
+        device_row = QHBoxLayout()
+        device_row.addWidget(self.cb_device, 1)
+        device_row.addWidget(self.btn_refresh_devices)
+
+        outdir_row = QHBoxLayout()
+        outdir_row.addWidget(self.lbl_outdir, 1)
+        outdir_row.addWidget(self.btn_outdir)
+
+        params_form = QFormLayout()
+        params_form.addRow("Input device:", device_row)
+        params_form.addRow("LPM:",          self.cb_lpm_live)
+        params_form.addRow("IOC:",          self.cb_ioc_live)
+        params_form.addRow("Bandwidth:",    self.cb_bw_live)
+        params_form.addRow("Save to:",      outdir_row)
+        params_form.addRow(self.chk_auto_start)
+
+        ctl_row = QHBoxLayout()
+        ctl_row.addWidget(self.btn_listen)
+        ctl_row.addWidget(self.btn_manual_start)
+        ctl_row.addWidget(self.btn_manual_stop)
+
+        root = QVBoxLayout()
+        root.addLayout(params_form)
+        root.addLayout(ctl_row)
+        root.addWidget(self.lvl_bar)
+        root.addWidget(self.lbl_live_image, 1)
+        root.addWidget(self.lbl_live_info)
+
+        page = QWidget()
+        page.setLayout(root)
+
+        # Populate device list. If sounddevice is missing, the dropdown
+        # is empty and "Start listening" remains disabled with a tooltip.
+        self._refresh_devices()
+        return page
+
+    # ---- Device discovery ---------------------------------------------
+    def _refresh_devices(self) -> None:
+        self.cb_device.clear()
+        try:
+            import sounddevice as sd
+            devices = sd.query_devices()
+            default = sd.default.device[0] if sd.default.device else None
+            for i, d in enumerate(devices):
+                if d.get('max_input_channels', 0) > 0:
+                    label = f"{i}: {d['name']}"
+                    if i == default:
+                        label += "  (default)"
+                    self.cb_device.addItem(label, i)
+            if self.cb_device.count() == 0:
+                self.cb_device.addItem("No input devices found", None)
+                self.btn_listen.setEnabled(False)
+            else:
+                self.btn_listen.setEnabled(True)
+        except (ImportError, OSError) as exc:
+            self.cb_device.addItem(f"PortAudio unavailable: {exc}", None)
+            self.btn_listen.setEnabled(False)
+            self.btn_listen.setToolTip(
+                "Install sounddevice and PortAudio to enable live audio."
+            )
+
+    def _on_choose_outdir(self) -> None:
+        path = QFileDialog.getExistingDirectory(
+            self, "Choose output folder", self.lbl_outdir.text()
+        )
+        if path:
+            self.lbl_outdir.setText(path)
+
+    def _on_auto_start_toggled(self, checked: bool) -> None:
+        if self._live_worker is not None:
+            self._live_worker.set_auto_start(checked)
+
+    # ---- Listening lifecycle -------------------------------------------
+    def _on_listen_toggle(self) -> None:
+        if self._live_worker is None:
+            self._start_listening()
+        else:
+            self._stop_listening()
+
+    def _start_listening(self) -> None:
+        device = self.cb_device.currentData()
+        if device is None:
+            QMessageBox.warning(self, "No input device", "Pick an input device first.")
+            return
+
+        # Make sure the output folder exists.
+        outdir = Path(self.lbl_outdir.text())
+        try:
+            outdir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            QMessageBox.critical(self, "Cannot create folder", str(exc))
+            return
+
+        params = DecodeParams(
+            lpm=self.cb_lpm_live.currentData(),
+            ioc=self.cb_ioc_live.currentData(),
+            bandwidth=self.cb_bw_live.currentData(),
+            skip_header_detection=False,
+        )
+        self._live_target_w = int(round(params.ioc * math.pi / 2))
+        self._live_buffer   = None
+        self._live_image    = None
+
+        self._live_worker = LiveDecodeWorker(
+            params=params,
+            device_index=device,
+            sample_rate=11025,
+            auto_start=self.chk_auto_start.isChecked(),
+        )
+        self._live_worker.started_listening.connect(self._on_live_started)
+        self._live_worker.stopped.connect(self._on_live_stopped)
+        self._live_worker.failed.connect(self._on_live_failed)
+        self._live_worker.audio_level.connect(self._on_audio_level)
+        self._live_worker.line_decoded.connect(self._on_live_line)
+        self._live_worker.image_started.connect(self._on_image_started)
+        self._live_worker.image_finished.connect(self._on_image_finished)
+        self._live_worker.start()
+
+        self.btn_listen.setText("Stop listening")
+        self.btn_manual_start.setEnabled(True)
+
+    def _stop_listening(self) -> None:
+        if self._live_worker is not None:
+            self._live_worker.request_stop()
+            # The 'stopped' signal will reset UI when the thread exits.
+
+    # ---- Slots from worker ---------------------------------------------
+    def _on_live_started(self, sample_rate: int) -> None:
+        self.lbl_live_info.setText(
+            f"Listening @ {sample_rate} Hz - waiting for "
+            + ("START tone" if self.chk_auto_start.isChecked()
+               else "manual start")
+        )
+        self.statusBar().showMessage("Listening", 0)
+
+    def _on_live_stopped(self) -> None:
+        self._live_worker = None
+        self.btn_listen.setText("Start listening")
+        self.btn_manual_start.setEnabled(False)
+        self.btn_manual_stop.setEnabled(False)
+        self.lvl_bar.setValue(0)
+        self.lbl_live_info.setText("Idle.")
+        self.statusBar().showMessage("Stopped", 3000)
+
+    def _on_live_failed(self, msg: str) -> None:
+        QMessageBox.critical(self, "Live decode failed", msg)
+        self._on_live_stopped()
+
+    def _on_audio_level(self, rms: float) -> None:
+        # rms is float-amplitude (0..1). Use a log-ish scale for nicer feel.
+        # 0.0 -> 0%, 0.01 -> ~30%, 0.1 -> ~75%, 1.0 -> 100%
+        if rms <= 1e-5:
+            pct = 0
+        else:
+            pct = int(min(100, max(0, 100 * (1 + math.log10(rms) / 3))))
+        self.lvl_bar.setValue(pct)
+
+    def _on_image_started(self, reason: str) -> None:
+        self.lbl_live_info.setText(
+            f"Recording image (trigger: {reason})..."
+        )
+        # Initialise an empty preview canvas. We don't know the final
+        # height, so we grow as lines arrive.
+        self._live_buffer = np.full(
+            (1, self._live_target_w), 255, dtype=np.uint8
+        )
+        self.btn_manual_start.setEnabled(False)
+        self.btn_manual_stop.setEnabled(True)
+
+    def _on_live_line(self, line_idx: int, line_pixels: np.ndarray) -> None:
+        # Append to growing buffer and refresh the preview.
+        if self._live_buffer is None:
+            return
+        if line_idx == 0:
+            self._live_buffer = line_pixels.reshape(1, -1).copy()
+        else:
+            self._live_buffer = np.vstack([self._live_buffer, line_pixels])
+
+        # Throttle preview refresh: only every 10 lines (=5 s @ 120 LPM).
+        if line_idx % 10 == 0:
+            img = Image.fromarray(self._live_buffer, mode='L')
+            self._show_pixmap(self.lbl_live_image, img)
+            self.statusBar().showMessage(f"Receiving line {line_idx}", 0)
+
+    def _on_image_finished(
+        self,
+        img: Image.Image,
+        info: dict,
+        wav_bytes: bytes,
+    ) -> None:
+        self._live_image = img
+
+        # Auto-save image and WAV side by side with timestamped names.
+        from datetime import datetime
+        outdir = Path(self.lbl_outdir.text())
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        png_path = outdir / f"wefax_{ts}.png"
+        wav_path = outdir / f"wefax_{ts}.wav"
+        try:
+            img.save(png_path)
+            with open(wav_path, 'wb') as fh:
+                fh.write(wav_bytes)
+            saved_msg = f"Saved {png_path.name} + {wav_path.name}"
+        except Exception as exc:
+            saved_msg = f"Save failed: {exc}"
+
+        self._show_pixmap(self.lbl_live_image, img)
+        self.lbl_live_info.setText(
+            f"Image done ({info['finish_reason']}): "
+            f"{info['image_width']}x{info['image_height']} px, "
+            f"{info['audio_seconds']:.1f} s audio. {saved_msg}"
+        )
+        # Continue listening for the next image.
+        self.btn_manual_start.setEnabled(True)
+        self.btn_manual_stop.setEnabled(False)
+
+    def _on_manual_start(self) -> None:
+        if self._live_worker is not None:
+            self._live_worker.manual_start()
+
+    def _on_manual_stop(self) -> None:
+        if self._live_worker is not None:
+            self._live_worker.manual_stop_image()
+
+    # ==================================================================
+    # Shared helpers
+    # ==================================================================
+    def _show_pixmap(self, label: QLabel, img: Image.Image) -> None:
+        """Display a PIL image scaled to fit the given QLabel."""
+        rgb = img.convert('RGB')
+        qimg = QImage(rgb.tobytes(), rgb.width, rgb.height,
+                      3 * rgb.width, QImage.Format.Format_RGB888)
+        pix = QPixmap.fromImage(qimg).scaled(
+            label.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        label.setPixmap(pix)
+
+    def closeEvent(self, event):
+        # Make sure the live worker is shut down cleanly.
+        if self._live_worker is not None:
+            self._live_worker.request_stop()
+            self._live_worker.wait(2000)
+        super().closeEvent(event)
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+def main() -> int:
+    app = QApplication(sys.argv)
+    win = FaxDecoderWindow()
+    win.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+
+# === tools/fax_wav_generator.py ===
+#!/usr/bin/env python3
+"""
+fax_wav_generator.py — WEFAX test-WAV generator for PK232PY.
+
+Generates three self-contained WEFAX (HF weather-fax) WAV files that can be
+fed into the PK232PY FAX decoder or the standalone WEFAX audio-decoder tool
+(``fax_decoder_test.py``) to verify the full receive/decode chain WITHOUT any
+TNC, radio or live audio:
+
+    fax_test_wetterkarte.wav   real reference weather chart
+    fax_test_pattern.wav       synthetic geometry / resolution test pattern
+    fax_test_text.wav          Lorem-Ipsum text page (Arial 16 pt)
+
+Each file is a complete WEFAX transmission:
+
+    [ APT start tone ] [ phasing lines ] [ image lines ] [ stop tone ] [ black ]
+
+Dependencies: numpy + Pillow + the stdlib ``wave`` module. (No scipy, no Qt —
+deliberately kept dependency-light so the tool runs in a bare venv.)
+
+Usage:
+    cd E:\\PK232\\pk232py_repo
+    python tools/fax_wav_generator.py
+
+------------------------------------------------------------------------------
+LERNMODUS — the two non-obvious ideas in this file
+------------------------------------------------------------------------------
+
+1. PHASE ACCUMULATOR (continuous-phase FM / DDS)
+   We do NOT build the signal by concatenating little sine snippets, one per
+   pixel:  sin(2*pi*f1*t) ++ sin(2*pi*f2*t) ++ ...
+   Each snippet starts its sine at phase 0, so at every pixel boundary the
+   waveform jumps. Those discontinuities are audible clicks and — far worse —
+   they put broadband energy into the spectrum that confuses an FM
+   demodulator (it sees a phantom frequency spike at every join).
+
+   Instead we build ONE instantaneous-frequency array f[n] for the whole
+   transmission and integrate it once:
+
+       phase[n] = 2*pi/fs * cumsum(f[0..n])      (the "accumulator")
+       signal[n] = sin(phase[n])
+
+   Because phase is the running integral of frequency, it is continuous by
+   construction even though f[n] is a staircase — no clicks anywhere, not even
+   between the framing tones and the image. This is exactly how a real
+   FSK/FM modulator (a DDS chip) works.
+
+2. PIXEL -> FREQUENCY MAPPING (white = HIGH tone)
+   International WEFAX convention (the one decoders expect):
+       black pixel (0)   -> 1500 Hz   (low tone)
+       white pixel (255) -> 2300 Hz   (high tone)
+   so:   f = F_BLACK + (pixel/255) * (F_WHITE - F_BLACK)
+
+   GOTCHA: the original task text wrote this as
+       f = white + (pixel/255)*(black - white)
+   which actually maps pixel 0 -> 2300 and 255 -> 1500 (inverted!). That
+   contradicts the task's own parenthetical ("pixel 0 = black = 1500 Hz") and
+   the existing project encoder (fax_encoder_test.py). We implement the
+   correct, decoder-compatible mapping below and keep the convention in one
+   place (``pixel_to_freq``) so a FAXNEG/inverted test is a one-line change.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+import wave
+from pathlib import Path
+
+import numpy as np
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+except ImportError:  # pragma: no cover - clear guidance instead of a traceback
+    sys.exit("Pillow is required: pip install Pillow")
+
+
+# ===========================================================================
+# CONSTANTS  — every WEFAX / audio parameter lives here and is editable
+# ===========================================================================
+
+# --- Audio format ----------------------------------------------------------
+SAMPLE_RATE   = 11025        # Hz. Nyquist 5512 Hz >> 2300 Hz tone -> plenty of
+                             # headroom, and keeps the files compact. Set to
+                             # 8000 / 16000 if a decoder insists on it.
+BITS_PER_SAMPLE = 16         # 16-bit PCM
+AMPLITUDE     = 0.8          # peak fraction of full scale (headroom vs clipping)
+
+# --- WEFAX tone frequencies -------------------------------------------------
+F_BLACK       = 1500.0       # Hz — black pixel  (low tone)
+F_WHITE       = 2300.0       # Hz — white pixel  (high tone)
+# Centre 1900 Hz, shift +/-400 Hz. (The PK-232 internally uses a 1.7 kHz /
+# 1000 Hz wide-shift filter, but 1500/2300 Hz is the on-air WEFAX convention
+# that file decoders expect — see module docstring.)
+
+F_APT_START   = 300.0        # Hz — APT start keying rate for IOC 576
+F_STOP        = 450.0        # Hz — WEFAX stop tone
+
+# --- Timing -----------------------------------------------------------------
+LPM           = 120          # lines per minute (FSPEED 2 = 2 lines/s)
+T_LINE        = 60.0 / LPM   # seconds per image line -> 0.5 s at 120 LPM
+T_APT_START   = 5.0          # s of APT start tone
+N_PHASING_LINES = 20         # phasing lines (each T_LINE long)
+T_STOP        = 5.0          # s of stop tone
+T_TRAILING_BLACK = 2.0       # s of solid black after the stop tone
+
+PHASING_BLACK_FRAC = 0.05    # narrow black sync pulse at the start of each
+                             # phasing line; the rest of the line is white
+
+# --- Image geometry ---------------------------------------------------------
+IMG_WIDTH     = 1152         # pixels per line (~2 * IOC for IOC 576)
+NUM_LINES     = 600          # image height in lines.
+                             # 600 lines = 300 s of image at 120 LPM = full-spec
+                             # WEFAX chart. Must be >= IMG_WIDTH//2 (the test
+                             # pattern's circle diameter) or the circle gets
+                             # clipped top/bottom. Set to 300 only for quick
+                             # smoke tests where geometry fidelity is irrelevant.
+
+# --- Text rendering (WAV 3) -------------------------------------------------
+TEXT_DPI      = 96           # assumed display DPI for pt -> px conversion
+FONT_PT       = 16           # Arial point size requested
+# 16 pt @ 96 DPI = 16 * 96/72 = ~21 px
+FONT_PX       = round(FONT_PT * TEXT_DPI / 72)
+
+# Candidate Arial paths (first hit wins); metric-compatible fallbacks after.
+FONT_CANDIDATES = [
+    r"C:\Windows\Fonts\arial.ttf",
+    "/usr/share/fonts/truetype/msttcorefonts/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+    # --- fallbacks (a WARNING is printed if one of these is used) ---
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    r"C:\Windows\Fonts\segoeui.ttf",
+]
+_PREFERRED_FONTS = {"arial.ttf"}   # lower-cased basenames we treat as "Arial"
+
+# --- Reference weather chart (WAV 1) ----------------------------------------
+# /mnt/project/Wetterkarte.jpg is the Claude project-knowledge path; the
+# in-repo equivalent is wetterkarte_decoded.png (a real decoded weather fax).
+WEATHER_IMAGE_CANDIDATES = [
+    "Wetterkarte.jpg",
+    "wetterkarte.jpg",
+    "docs/Wetterkarte.jpg",
+    "/mnt/project/Wetterkarte.jpg",
+    "wetterkarte_decoded.png",          # in-repo decoded reference chart
+]
+
+# Lorem Ipsum source text (WAV 3)
+LOREM = (
+    "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod "
+    "tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim "
+    "veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea "
+    "commodo consequat. Duis aute irure dolor in reprehenderit in voluptate "
+    "velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint "
+    "occaecat cupidatat non proident, sunt in culpa qui officia deserunt "
+    "mollit anim id est laborum."
+)
+
+
+# ===========================================================================
+# FM ENCODER  — instantaneous-frequency arrays + one phase accumulator
+# ===========================================================================
+
+def pixel_to_freq(pixel: np.ndarray | int) -> np.ndarray | float:
+    """Map grayscale value(s) 0..255 to WEFAX tone frequency in Hz.
+
+    0   (black) -> F_BLACK (1500 Hz, low tone)
+    255 (white) -> F_WHITE (2300 Hz, high tone)
+
+    See module docstring (idea #2) for why white is the HIGH tone and why the
+    task's inline formula was inverted.
+    """
+    return F_BLACK + (np.asarray(pixel, dtype=np.float64) / 255.0) * (F_WHITE - F_BLACK)
+
+
+def _integrate(freq: np.ndarray) -> np.ndarray:
+    """Turn an instantaneous-frequency array (Hz, per sample) into a
+    phase-continuous, normalised float32 audio array in [-1, 1].
+
+    This *is* the phase accumulator: phase = 2*pi/fs * running-sum(freq).
+    cumsum guarantees continuity regardless of how the frequency jumps.
+    """
+    phase = (2.0 * np.pi / SAMPLE_RATE) * np.cumsum(freq.astype(np.float64))
+    return np.sin(phase).astype(np.float32)
+
+
+def _const_freq(freq_hz: float, seconds: float) -> np.ndarray:
+    """A flat instantaneous-frequency segment of the given duration."""
+    n = int(round(seconds * SAMPLE_RATE))
+    return np.full(n, freq_hz, dtype=np.float64)
+
+
+# --- Framing-tone frequency builders ---------------------------------------
+
+def apt_start_freq() -> np.ndarray:
+    """APT start: black/white keyed at F_APT_START (300 Hz) for T_APT_START s.
+
+    A square wave that toggles between the black and white tones 300 times a
+    second. A decoder's start-detector locks onto this 300 Hz keying rate.
+    """
+    n = int(round(T_APT_START * SAMPLE_RATE))
+    # fractional phase of the 300 Hz keying square wave at each sample
+    keying_phase = (np.arange(n) * F_APT_START / SAMPLE_RATE) % 1.0
+    return np.where(keying_phase < 0.5, F_BLACK, F_WHITE).astype(np.float64)
+
+
+def phasing_freq() -> np.ndarray:
+    """Phasing lines: each T_LINE long, a narrow black pulse at the line start
+    then white for the rest. Gives the decoder a repeating, unambiguous
+    line-start marker so it can lock horizontal phase before the image."""
+    n_line  = int(round(T_LINE * SAMPLE_RATE))
+    n_black = max(1, int(round(n_line * PHASING_BLACK_FRAC)))
+    one_line = np.concatenate([
+        np.full(n_black,          F_BLACK, dtype=np.float64),
+        np.full(n_line - n_black, F_WHITE, dtype=np.float64),
+    ])
+    return np.tile(one_line, N_PHASING_LINES)
+
+
+def stop_freq() -> np.ndarray:
+    """WEFAX stop tone (450 Hz) followed by trailing solid black."""
+    return np.concatenate([
+        _const_freq(F_STOP,  T_STOP),
+        _const_freq(F_BLACK, T_TRAILING_BLACK),
+    ])
+
+
+def image_freq(img: np.ndarray) -> np.ndarray:
+    """Instantaneous-frequency array for one image (uint8, shape (H, W)).
+
+    Each line lasts T_LINE seconds; the W pixels of the line are spread evenly
+    across that time. We compute the source (line, column) for *every* output
+    sample by vectorised arithmetic — no Python loop over pixels.
+
+    GOTCHA: T_LINE * fs = 5512.5 samples is non-integer at 120 LPM / 11025 Hz.
+    Building from a fixed integer samples-per-line would drift by half a sample
+    each line and slowly skew the image. We instead map global sample time
+    -> fractional line position, so the line length self-corrects and the
+    total length is exactly round(NUM_LINES * T_LINE * fs).
+    """
+    h, w = img.shape
+    total = int(round(h * T_LINE * SAMPLE_RATE))
+    samples_per_line = T_LINE * SAMPLE_RATE
+
+    # global position in "line units": 0.0 .. h (fractional)
+    pos        = np.arange(total, dtype=np.float64) / samples_per_line
+    line_idx   = np.clip(pos.astype(np.int64), 0, h - 1)
+    frac       = pos - np.floor(pos)                       # 0..1 within the line
+    col_idx    = np.clip((frac * w).astype(np.int64), 0, w - 1)
+
+    pixels = img[line_idx, col_idx]
+    return pixel_to_freq(pixels)
+
+
+def image_to_fax_signal(img: np.ndarray) -> np.ndarray:
+    """Public convenience: encode an image (uint8 2-D array) to normalised
+    float32 audio with the phase accumulator. Phase-continuous across all
+    pixels and lines. (main() assembles the full transmission from the
+    *frequency* builders above and integrates ONCE, so even the framing/image
+    boundaries are click-free — see main().)"""
+    return _integrate(image_freq(img))
+
+
+# ===========================================================================
+# TEST-IMAGE GENERATORS  — each returns uint8 ndarray, shape (NUM_LINES, IMG_WIDTH)
+# ===========================================================================
+
+def _fit_to_canvas(src: Image.Image) -> np.ndarray:
+    """Scale a grayscale PIL image to IMG_WIDTH, then bring its height to
+    NUM_LINES (shrink if taller, white-pad at the bottom if shorter)."""
+    src = src.convert("L")
+    w, h = src.size
+    new_h = max(1, round(h * IMG_WIDTH / w))
+    src = src.resize((IMG_WIDTH, new_h), Image.LANCZOS)
+
+    if new_h == NUM_LINES:
+        return np.asarray(src, dtype=np.uint8)
+    if new_h > NUM_LINES:
+        # squash to fit — keeps the whole chart visible for geometry checks
+        src = src.resize((IMG_WIDTH, NUM_LINES), Image.LANCZOS)
+        return np.asarray(src, dtype=np.uint8)
+    # shorter than the canvas: pad below with white (255)
+    canvas = np.full((NUM_LINES, IMG_WIDTH), 255, dtype=np.uint8)
+    canvas[:new_h, :] = np.asarray(src, dtype=np.uint8)
+    return canvas
+
+
+def make_weather_image() -> np.ndarray:
+    """WAV 1 source: the real reference weather chart from the repo/project."""
+    searched = []
+    for cand in WEATHER_IMAGE_CANDIDATES:
+        searched.append(cand)
+        if os.path.isfile(cand):
+            print(f"  weather chart: using '{cand}'")
+            return _fit_to_canvas(Image.open(cand))
+    raise FileNotFoundError(
+        "Reference weather chart not found. Searched these paths "
+        "(relative to the current working directory):\n  - "
+        + "\n  - ".join(searched)
+        + "\nPlace a grayscale weather chart at one of these paths and retry."
+    )
+
+
+def make_pattern_image() -> np.ndarray:
+    """WAV 2 source: synthetic geometry / resolution test pattern.
+
+    Top third    : horizontal black lines on white, varying spacing.
+    Middle band  : vertical black lines on white.
+    Centre       : circle outline, diameter = 50% of width (576 px).
+    Bottom third : horizontal bars of increasing thickness (1,2,4,8,16,32 px)
+                   to expose IOC/ASPECT (vertical) distortion.
+    """
+    img = Image.new("L", (IMG_WIDTH, NUM_LINES), color=255)  # white background
+    d = ImageDraw.Draw(img)
+    third = NUM_LINES // 3
+
+    # --- top third: horizontal lines, spacing grows left->right via gaps ----
+    y = 4
+    gap = 4
+    while y < third - 2:
+        d.line([(0, y), (IMG_WIDTH - 1, y)], fill=0, width=1)
+        y += gap
+        gap += 1                       # progressively wider spacing
+
+    # --- middle band: vertical lines ---------------------------------------
+    mid_top, mid_bot = third + 4, 2 * third - 4
+    x = 4
+    vgap = 6
+    while x < IMG_WIDTH - 2:
+        d.line([(x, mid_top), (x, mid_bot)], fill=0, width=1)
+        x += vgap
+
+    # --- centre: circle outline, diameter = 50% of width --------------------
+    # Clamp to NUM_LINES so the circle is never clipped top/bottom and stays
+    # round even on a short canvas. At NUM_LINES=600 this is the full 576 px.
+    diameter = min(IMG_WIDTH // 2, NUM_LINES - 8)   # 8 px breathing room
+    cx, cy = IMG_WIDTH // 2, NUM_LINES // 2
+    r = diameter // 2
+    d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=0, width=2)
+
+    # --- bottom third: bars of increasing thickness ------------------------
+    y = 2 * third + 6
+    for thickness in (1, 2, 4, 8, 16, 32):
+        if y + thickness >= NUM_LINES:
+            break
+        d.rectangle([40, y, IMG_WIDTH - 40, y + thickness - 1], fill=0)
+        y += thickness + 6             # bar + gap
+
+    return np.asarray(img, dtype=np.uint8)
+
+
+def _load_font():
+    """Return (ImageFont, name_used, is_fallback)."""
+    for path in FONT_CANDIDATES:
+        if os.path.isfile(path):
+            base = os.path.basename(path).lower()
+            is_fallback = base not in _PREFERRED_FONTS
+            return ImageFont.truetype(path, FONT_PX), os.path.basename(path), is_fallback
+    return ImageFont.load_default(), "PIL-default-bitmap", True
+
+
+def _wrap(text: str, font, draw: ImageDraw.ImageDraw, max_w: int) -> list[str]:
+    """Greedy word-wrap to pixel width using the font's real metrics."""
+    lines, cur = [], ""
+    for word in text.split():
+        trial = word if not cur else cur + " " + word
+        if draw.textlength(trial, font=font) <= max_w:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            cur = word
+    if cur:
+        lines.append(cur)
+    return lines
+
+
+def make_text_image() -> np.ndarray:
+    """WAV 3 source: Lorem-Ipsum text page, black on white, Arial 16 pt."""
+    font, name, is_fallback = _load_font()
+    if is_fallback:
+        print(f"  WARNING: Arial not found — using fallback font '{name}' "
+              f"(metrics differ slightly from Arial).")
+    else:
+        print(f"  text font: '{name}' @ {FONT_PT}pt ({FONT_PX}px, {TEXT_DPI} DPI)")
+
+    img = Image.new("L", (IMG_WIDTH, NUM_LINES), color=255)
+    d = ImageDraw.Draw(img)
+    margin = 24
+    line_h = round(FONT_PX * 1.35)     # 1.35x leading
+
+    # wrap a few paragraphs, repeat until the page is full
+    wrapped = _wrap(LOREM, font, d, IMG_WIDTH - 2 * margin)
+    y = margin
+    para = 0
+    while y < NUM_LINES - line_h:
+        for ln in wrapped:
+            if y >= NUM_LINES - line_h:
+                break
+            d.text((margin, y), ln, fill=0, font=font)
+            y += line_h
+        y += line_h // 2               # blank line between paragraphs
+        para += 1
+        if para > 50:                  # safety stop
+            break
+
+    return np.asarray(img, dtype=np.uint8)
+
+
+# ===========================================================================
+# WAV OUTPUT
+# ===========================================================================
+
+def write_wav(path: Path, signal: np.ndarray, sample_rate: int) -> None:
+    """Write a normalised float32 signal in [-1, 1] as 16-bit PCM mono WAV,
+    scaled to AMPLITUDE of full scale."""
+    peak = float(np.max(np.abs(signal))) or 1.0
+    scaled = signal / peak * AMPLITUDE          # normalise then apply headroom
+    pcm = np.clip(scaled * 32767.0, -32768, 32767).astype("<i2")  # little-endian int16
+
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(BITS_PER_SAMPLE // 8)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm.tobytes())
+
+
+# ===========================================================================
+# ASSEMBLY + SANITY CHECK + MAIN
+# ===========================================================================
+
+def build_transmission(img: np.ndarray) -> np.ndarray:
+    """Assemble a full WEFAX transmission as ONE phase-continuous signal.
+
+    We concatenate the instantaneous-FREQUENCY arrays of every section and
+    integrate exactly once. That single cumsum means there is no phase jump
+    even at the start/phasing/image/stop boundaries — the whole file is
+    click-free.
+    """
+    full_freq = np.concatenate([
+        apt_start_freq(),     # 1. APT start tone
+        phasing_freq(),       # 2. phasing lines
+        image_freq(img),      # 3. image
+        stop_freq(),          # 4. stop tone + trailing black
+    ])
+    return _integrate(full_freq)
+
+
+def _dominant_freq(signal: np.ndarray, fs: int) -> float:
+    """Crude dominant-frequency estimate of a slice via FFT magnitude peak."""
+    n = len(signal)
+    if n < 2:
+        return 0.0
+    win = signal * np.hanning(n)
+    spec = np.abs(np.fft.rfft(win))
+    freqs = np.fft.rfftfreq(n, 1.0 / fs)
+    return float(freqs[int(np.argmax(spec))])
+
+
+def sanity_check(label: str, signal: np.ndarray, fs: int) -> None:
+    """Print duration, sample count, amplitude range and a rough dominant
+    frequency taken from a slice inside the image region."""
+    dur = len(signal) / fs
+    # a 0.25 s slice well inside the IMAGE region (past start tone + phasing),
+    # so the dominant frequency reflects actual picture content
+    img_start_s = T_APT_START + N_PHASING_LINES * T_LINE + 5.0
+    s0 = int(img_start_s * fs)
+    s1 = min(len(signal), s0 + int(0.25 * fs))
+    dom = _dominant_freq(signal[s0:s1], fs) if s1 > s0 else 0.0
+    print(f"  [{label}] duration={dur:6.1f}s  samples={len(signal):,}  "
+          f"min/max={signal.min():+.3f}/{signal.max():+.3f}  "
+          f"dom~{dom:5.0f}Hz (band {F_BLACK:.0f}-{F_WHITE:.0f}Hz)")
+
+
+def main() -> int:
+    out_dir = Path.cwd()
+    jobs = [
+        ("fax_test_wetterkarte.wav", "weather", make_weather_image),
+        ("fax_test_pattern.wav",     "pattern", make_pattern_image),
+        ("fax_test_text.wav",        "text",    make_text_image),
+    ]
+
+    print(f"WEFAX test-WAV generator — {LPM} LPM, IOC 576, {IMG_WIDTH}px/line, "
+          f"{NUM_LINES} lines, {SAMPLE_RATE} Hz\n")
+
+    for filename, label, make_image in jobs:
+        print(f"* {filename}")
+        try:
+            img = make_image()
+        except FileNotFoundError as exc:
+            print(f"  ERROR: {exc}")
+            return 2
+        signal = build_transmission(img)
+        path = out_dir / filename
+        write_wav(path, signal, SAMPLE_RATE)
+        size_mb = path.stat().st_size / (1024 * 1024)
+        sanity_check(label, signal, SAMPLE_RATE)
+        print(f"  wrote {path}  ({size_mb:.2f} MB)\n")
+
+    print("Done. Feed a WAV into the decoder:")
+    print("  - GUI:  python fax_decoder_test.py  ->  'Open WAV'  -> pick the file")
+    print("  - or play it into the PK232PY FAX screen via an audio loopback "
+          "(VB-CABLE / 'Stereo Mix') routed to the TNC/soundcard input.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
 # === src/pk232py/help/help_baudot.md ===
 # PK232PY — Baudot RTTY Help
 
@@ -19866,6 +23651,6 @@ macro texts to automate TX/RX switching.
 
 # =============================================================================
 # End of export
-# Files included : 67
+# Files included : 70
 # Files skipped  : 0  (duplicates / empty __init__.py)
 # =============================================================================

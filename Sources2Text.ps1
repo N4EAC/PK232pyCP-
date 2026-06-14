@@ -1,4 +1,4 @@
-# Export-PK232PySources.ps1
+# Sources2Text.ps1
 #
 # Generates pk232py_sources.txt for upload to the Claude project knowledge base.
 # Run from the repository root:
@@ -11,8 +11,9 @@
 #   -SkipTests    skip files in tests/ directories
 #
 # Files included:
-#   src/pk232py/**/*.py     All Python source files
+#   src/pk232py/**/*.py     All Python source files (production code)
 #   src/pk232py/help/*.md   Help files (Markdown)
+#   tools/**/*.py           Standalone tools (FAX generator/decoder, etc.)
 #
 # The output file is UTF-8 without BOM, LF line endings, no duplicate files.
 
@@ -62,12 +63,37 @@ $(if ($gitBranch) { "# Branch    : $gitBranch  ($gitHash)" })
 #     macros/              Macro system
 #     maildrop/            MailDrop (TNC mail box)
 #     tests/               Unit tests
+#   tools/                 Standalone tools (FAX WAV generator/decoder, etc.)
 #
 # Each file is preceded by a separator line:
 #   # === <relative path> ===
 # =============================================================================
 
 "@
+
+# ---------------------------------------------------------------------------
+# Helper: canonical repo-relative path for a file (forward slashes).
+#
+# Works for any file under the repo root, not just src/pk232py. Earlier the
+# path logic special-cased "src/pk232py/..." via regex; tools/ files did not
+# match and fell through to a brittle root-trim. This helper strips the repo
+# root once and normalises separators, so headers are correct for src/, help/
+# and tools/ alike.
+# ---------------------------------------------------------------------------
+
+function Get-RelPath {
+    param([string] $AbsPath)
+
+    # Normalise both to forward slashes first, then strip the repo root prefix.
+    $absNorm  = $AbsPath.Replace("\", "/")
+    $rootNorm = $repoRoot.Replace("\", "/").TrimEnd("/")
+
+    if ($absNorm.StartsWith($rootNorm + "/", [System.StringComparison]::OrdinalIgnoreCase)) {
+        return $absNorm.Substring($rootNorm.Length + 1)
+    }
+    # Fallback: keep a recognisable tail if the file is somehow outside the root.
+    return $absNorm
+}
 
 # ---------------------------------------------------------------------------
 # Collect Python source files
@@ -81,20 +107,36 @@ $priorityOrder = @(
     "__main__.py"
 )
 
-$pyFiles = Get-ChildItem -Path "src/pk232py" -Recurse -Filter "*.py" |
+# Scan src/pk232py (production code) AND tools/ (standalone tools).
+# Each scanned root is optional: if it does not exist we just skip it.
+$pyScanRoots = @("src/pk232py", "tools")
+
+$pyFilesRaw = @()
+foreach ($root in $pyScanRoots) {
+    if (Test-Path $root) {
+        $pyFilesRaw += Get-ChildItem -Path $root -Recurse -Filter "*.py"
+    } else {
+        Write-Host "INFO: scan root '$root' not found - skipped"
+    }
+}
+
+$pyFiles = $pyFilesRaw |
     Where-Object {
         # Optionally skip test files
         if ($SkipTests -and $_.FullName -match "[\\/]tests[\\/]") { return $false }
         return $true
     } |
     Sort-Object {
-        $rel   = $_.FullName.Replace($repoRoot, "").TrimStart("\\/")
-        $depth = ($rel.Split("[\\/]", [System.StringSplitOptions]::None)).Count
+        $rel   = Get-RelPath $_.FullName
+        $depth = ($rel.Split("/", [System.StringSplitOptions]::None)).Count
         $prio  = 99
         for ($i = 0; $i -lt $priorityOrder.Count; $i++) {
             if ($_.Name -eq $priorityOrder[$i]) { $prio = $i; break }
         }
-        "{0:D2}_{1:D2}_{2}" -f $depth, $prio, $rel
+        # src/ before tools/ at equal depth: prefix a source-group key so the
+        # production code is listed first, tools afterwards.
+        $group = if ($rel.StartsWith("src/")) { "0" } else { "1" }
+        "{0}_{1:D2}_{2:D2}_{3}" -f $group, $depth, $prio, $rel
     }
 
 # ---------------------------------------------------------------------------
@@ -124,12 +166,7 @@ $skipped  = 0
 # -- Process Python files -----------------------------------------------------
 foreach ($file in $pyFiles) {
     $absPath = $file.FullName
-
-    if ($absPath -match '(src[/\\]pk232py[/\\].+)$') {
-        $relPath = $Matches[1].Replace("\", "/")
-    } else {
-        $relPath = $absPath.Replace($repoRoot + "\", "").Replace("\", "/")
-    }
+    $relPath = Get-RelPath $absPath
 
     if ($seen.ContainsKey($relPath)) {
         $skipped++
@@ -156,12 +193,7 @@ foreach ($file in $pyFiles) {
 # -- Process Markdown help files -----------------------------------------------
 foreach ($file in $mdFiles) {
     $absPath = $file.FullName
-
-    if ($absPath -match '(src[/\\]pk232py[/\\].+)$') {
-        $relPath = $Matches[1].Replace("\", "/")
-    } else {
-        $relPath = $absPath.Replace($repoRoot + "\", "").Replace("\", "/")
-    }
+    $relPath = Get-RelPath $absPath
 
     if ($seen.ContainsKey($relPath)) {
         $skipped++

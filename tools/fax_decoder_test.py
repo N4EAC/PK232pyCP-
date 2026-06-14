@@ -17,12 +17,23 @@ plugin for OpenCPN by Sean d'Epagnier:
 Algorithms in turn derive from yahfax / hamfax according to the comment
 in the original source.
 
-Re-implementation note
-----------------------
-Because the original is GPL v3, this Python port is released under GPL v3
-as well. If reused inside pk232py (currently GPL v2 only), the project
-licence must be relaxed to "GPL v2 or later" or this module must be
-replaced by an independent implementation.
+Scope & licence (IMPORTANT)
+---------------------------
+This decoder is a STANDALONE TEST TOOL only. It is never imported into,
+integrated with, or shipped as part of pk232py.
+
+In real operation the AEA PK-232MBX performs FAX demodulation in
+hardware and delivers ready-made pixel bytes (Epson ESC L column
+format) to pk232py over Host Mode — pk232py never decodes audio
+itself. This tool exists solely to verify a WEFAX transmission in a
+closed loop (fax_wav_generator.py -> WAV -> this decoder) without any
+TNC, radio or live audio.
+
+Because it is a separate test tool and never linked into the GPL-v2
+application, the GPL-v3 provenance of the ported weatherfax_pi
+algorithms creates no licence conflict with pk232py. If this code were
+ever to be reused inside pk232py (it will not be), the project licence
+would have to be relaxed to "GPL v2 or later".
 
 Architecture
 ------------

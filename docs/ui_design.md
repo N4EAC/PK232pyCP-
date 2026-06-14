@@ -158,6 +158,23 @@ btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
 # no setCheckable() — sends single command to TNC
 ```
 
+### Clear buttons (all screens)
+
+Every opmode screen now has clear controls, placed in the macro/clear row:
+
+- **TX-capable screens** (Baudot, ASCII, AMTOR, CW/Morse, PACTOR, HF Packet,
+  VHF Packet) expose **Clear TX** + **Clear RX**. They declare the signals
+  `clear_tx_req` / `clear_rx_req` (`pyqtSignal()`); `MainWindow` connects them
+  automatically in `_wire_mode_callbacks()` to `_on_clear_tx` / `_on_clear_rx`,
+  which own the actual clearing (incl. resetting packet dual-buffer state). The
+  screen only emits — it does not clear directly.
+- **Receive-only screens** clear themselves with a local slot (no signal):
+  Signal/SIAM and NAVTEX get **Clear RX** (`_on_clear_rx()`), and FAX gets
+  **Clear Image** (`_on_clear_image()`, also resets the line counter) because it
+  shows an image rather than text.
+
+All clear buttons are `NoFocus` so a click never steals keyboard focus.
+
 ### Mode buttons (AMTOR / PACTOR-style, mutually exclusive)
 
 ```python

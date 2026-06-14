@@ -1,38 +1,65 @@
 # PK232PY — Development Backlog
 
-**Last updated:** 2026-05-05 (v12)
+**Last updated:** 2026-06-14 (v16)
 **Current version:** v0.1 (development)
 
 ---
 
 ## Priority 1 — Next implementation sprint
 
-### CTRL+S control character
-- Insert `[^S]` marker (blue background) in TX window
-- `TxInputWidget.keyPressEvent`: detect CTRL+S, insert `[^S]`, `_doc_extra += 3`
-- `TxInputWidget` Backspace: atomic delete of `[^S]`, `_doc_extra -= 3`
-- `BaudotTxController.on_char_typed`: handle `\x13` sentinel → switch to SEND
-- `_on_macro_clicked`: detect `[^S]` in macro text, `_doc_extra += 3`
-- `MacroTextEdit.keyPressEvent`: CTRL+S support in Edit Macros dialog
-- Update `TX_STATE_MACHINE.md` §8
+### Packet — Connect/Disconnect & MHEARD (needs second station)
 
-### CTRL+T:n control character
-- Insert `[^T:n]` marker (purple background) in TX window
-- Variable length: `[^T:5]` = 7 chars, `[^T:12]` = 8 chars → `_doc_extra += len-1`
-- Behaviour: switch to RECEIVE, wait n seconds, switch back to SEND
-- Requires QTimer in BaudotTxController for the wait
-- Dialog for n input (or parse from marker text)
-- Update `TX_STATE_MACHINE.md` §8
+- Test T33–T36: Connect flow (CO frame → CONNECTED status pill)
+- Test T37–T39: Disconnect flow, Unproto toggle, mutual exclusion
+- Parse MHEARD response (`MH` frame) into MheardPanel entries (T41–T42)
 
-### Packet — AX.25 TX/RX Integration
-- Wire DATA frames ($20) from TNC to RX display
-- Wire LINK_MSG frames ($50) to status pill updates (CONNECTED/DISCONNECTED)
-- Parse MHEARD response into MheardPanel entries
-- Test T33–T51 (all currently OPEN)
+*Note: monitoring on 144.800 MHz has replaced most RX-only tests.
+T33–T39 require a second AX.25 station.*
+
+### Packet — Remaining toggle/button tests
+
+- T43 EAS toggle (`EA Y` / `EA N`)
+- T44 PASSALL toggle
+- T45 HBAUD change
+- T46 Monitor level change
+- T47 MailDrop button (`MI` frame)
+- T48 VHF vs HF init frames (VH Y / VH N)
+- T49 Keyboard focus after button click
+- T50 Dest + UNPROTO fields
+- T51 Mode switch away from VHF Packet (`VH N`)
 
 ---
 
 ## Priority 2 — Improvements
+
+### APRS — Phase 2
+
+| Item | Notes |
+|------|-------|
+| MHEARD panel: show APRS stations | Populate from received Mic-E + Position frames |
+| Beacon TX | UNPROTO APRS VIA WIDE1-1,WIDE2-1; periodic timer |
+| Beacon config UI | Position (lat/lon from INI), symbol, comment, interval |
+| Mic-E lon decode verify | Test with west-of-0° and lon > 100° stations |
+
+### FAX closed-loop test tooling — formalise tests
+
+- `tools/fax_wav_generator.py` + `tools/fax_decoder_test.py` provide a
+  closed-loop WEFAX test path (generator → WAV → decoder). Working.
+- **Open:** formal test cases T66–T68 (FAX closed-loop decode for
+  weather/pattern/text) still to be added to `Testplan.md`.
+- **Open:** `make_weather_image()` — the real weather-chart path is not
+  resolvable locally; `WEATHER_IMAGE_CANDIDATES` does not match the actual
+  file (e.g. `tools/Wetterkarte.jpg`), so it falls back to
+  `wetterkarte_decoded.png`. Extend the candidate list.
+
+### CTRL+D (EOT) in weiteren Opmodes
+
+CTRL+D als End-of-Transmission Marker ist in Baudot RTTY vollständig
+implementiert (BaudotTxController). Die gleiche Funktionalität soll in
+folgenden Modes ergänzt werden:
+
+- **AMTOR** — ARQ: EOT sendet `\x04`, TNC wechselt zurück zu STANDBY
+- **CW/Morse** — EOT sendet `\x04` oder `AR` (je nach TNC-Konfiguration)
 
 ### Help system — ausdifferenzieren
 - `help_baudot.md` exists as one large file
@@ -41,6 +68,14 @@
   - `help_shortcuts.md`
   - `help_ctrl_chars.md`
 - Add Help buttons to further dialogs (TNC Config, etc.)
+
+### TX_STATE_MACHINE.md §8 — Control Characters update
+- Update §8 table: `[^T:n]` als implemented eintragen
+- `[^S]` aus Planned entfernen (entschieden: nicht implementieren)
+- Sentinel-Encoding dokumentieren: `\x1b` + str(n)
+- Backspace-Handling (dict-basiert, variable Länge) dokumentieren
+
+### TooltipManager
 - `TooltipManager` — central tooltip registration for buttons
 
 ### MSPEED from TNC config
@@ -49,8 +84,8 @@
 - Config dialog already has MSPEED field for Morse — extend to Baudot/ASCII
 
 ### Macro control characters in dialog
-- `MacroTextEdit` already supports CTRL+D
-- Add CTRL+S and CTRL+T:n support when those are implemented
+- `MacroTextEdit` supports CTRL+D and CTRL+T:n
+- Verify CTRL+T:n dialog works correctly inside MacroEditDialog
 
 ### T18 — Multi-cycle colour test
 - Formal test: 3x SEND→RECEIVE→SEND without macros
@@ -59,7 +94,6 @@
 ### AMTOR Dest (le_dest) Autofill
 - AMTOR le_dest (Ziel-SELCAL) is editable but not pre-filled
 - Consider populating from last used callsign or history list
-- ARQ dialog with callsign history (noted in ui_design.md) — future item
 
 ---
 
@@ -71,32 +105,74 @@
 
 ### AMTOR ARQ TX integration
 - Rate-limited TX not needed (AMTOR is ARQ — TNC manages retransmission)
-- Colour tracking may differ
 
 ### PACTOR I TX integration
 - Similar to AMTOR
 
 ### QSO Log
 - SQLite-based log (`log/` directory already planned)
-- Log entries from RX window content
 
 ### MailDrop
 - TNC mailbox functionality (`maildrop/` directory planned)
 
 ---
 
-## Completed (this sprint — v11/v12)
+## Completed (v16 — 2026-06-14)
+
+| Item | Notes |
+|------|-------|
+| Clear TX / Clear RX buttons — all opmode screens | Done. TX-capable screens (AMTOR, CW/Morse, HF Packet, VHF Packet) emit `clear_tx_req` / `clear_rx_req` (signal pattern, wired by `MainWindow`); receive-only Signal/SIAM + NAVTEX got a local `_on_clear_rx()` slot; FAX got a local `_on_clear_image()` slot ("Clear Image"). |
+| FAX closed-loop test tooling (`tools/`) | `fax_wav_generator.py` (WEFAX test-WAV generator: weather/pattern/text) + `fax_decoder_test.py` standalone decoder. Generator GPL v2, decoder GPL v3 (test-only, never shipped). |
+| `fax_decoder_test.py` — fractional line length | Fixes accumulating line drift / slant (parallelogram) for non-integer samples-per-line. |
+| `fax_decoder_test.py` — header detection | Detects the keyed 300 Hz APT start on the demod stream + tolerant run-length tracking. |
+| `Sources2Text.ps1` — export `tools/**/*.py` | Export now includes `tools/` Python files (production code first, tools after). |
+
+## Completed (v15 — 2026-05-17)
+
+| Item | Notes |
+|------|-------|
+| Bug: CO on channel 0 → channel 1 | `build_ch_cmd(1, b'CO', ...)` in `_on_packet_connect()` |
+| Bug: DI on channel 0 → channel 1 | `build_ch_cmd(1, b'DI')` in `_on_packet_disconnect()` (Claude Code) |
+| Bug: `on_connect_toggled` AttributeError | Naming fix in `_wire_packet_buttons()` and disconnect handler |
+| T31 VHF Packet init frames | ✅ PA, VH Y, HB 1200, MX 4, SL 10, MN Y — confirmed on TNC |
+| T40 Monitor frames on 144.800 MHz | ✅ $3F frames received, decoded, displayed with UTC timestamps |
+| APRS decoder v3 (`aprs_decoder.py`) | Mic-E (lat/lon), Position, Position+Time, Telemetry, Weather, Message, Third-party, Item, Object |
+| APRS HTML display | Colour-coded cards in QTextEdit: orange/blue/green/yellow/pink per type |
+| APRS button + dual-buffer | Toggle re-renders full frame history; raw mode unchanged |
+| Mic-E backtick prefix fix | Strip `` ` ``/`'` before lon decoding — fixes 68°E → 16°E |
+| Claude Code workflow | Established for direct file changes; patch scripts only as fallback |
+
+## Completed (v14 — 2026-05-08)
 
 | Item | Version | Notes |
 |------|---------|-------|
-| HF Packet screen | v11 | `HFPacketScreen` in `packet_screen.py` |
-| VHF Packet screen | v11 | `VHFPacketScreen` in `packet_screen.py` |
+| FAX: ESC L Spalten-Decoder | v14 | 8-Pin Epson Format korrekt dekodiert |
+| FAX: Stream-Parser in fax_test.py | v14 | Frame-übergreifender ESC L Parser |
+| FAX: LOCK Button | v14 | Host-Mnemonic LO |
+| FAX: ASPECT ComboBox | v14 | IOC-Tabelle statt SpinBox |
+| FAX: FSPEED Index-Fix | v14 | FS sendet Index 0-4 statt RPM-Wert |
+| Host Mode Exit → Verbose | v14 | `_exiting_host_mode_by_user` Flag |
+| PACTOR capability detection | v14 | Banner-Erkennung, ComboBox/Menü disabled |
+| params_uploader race condition | v14 | 120ms Idle-Detection in write_verbose_wait() |
+
+## Completed (v13)
+
+| Item | Version | Notes |
+|------|---------|-------|
+| CTRL+T `[^T:n]` timed marker | v13 | Purple marker, QInputDialog for n (1–10) |
+| Bugfix: text after `[^T:n]` not sent | v13 | `_tx_queue.clear()` fix |
+| `_eot_positions` → dict-Liste | v13 | Variable Marker-Länge |
+
+## Completed (v11/v12)
+
+| Item | Version | Notes |
+|------|---------|-------|
+| HF Packet screen | v11 | `HFPacketScreen` |
+| VHF Packet screen | v11 | `VHFPacketScreen` |
 | Packet integration in MainWindow | v11 | `_wire_packet_buttons()`, 8 slots |
 | PACTOR/AMTOR/Packet QLineEdit focus fix | v12 | `ScreenFocusController` |
-| PACTOR MYPTCALL → QLabel display | v12 | Populated from AppConfig on mode switch |
-| AMTOR MYSELCAL/MYALTCAL/MYIDENT → QLabel | v12 | Populated from AppConfig on mode switch |
-| PACTOR opmode screen on mode switch | v12 | `mode_has_screen` guard in `_update_host_mode_ui` |
-| EventFilter `pass` → `return` fix | v12 | All screens affected |
+| PACTOR MYPTCALL → QLabel | v12 | Populated from AppConfig |
+| AMTOR identity labels → QLabel | v12 | Display-only |
 
 ---
 
@@ -104,12 +180,13 @@
 
 | Issue | Severity | Notes |
 |-------|----------|-------|
-| `MSPEED 20 Baud → 150ms/char` in log | Minor | Config reads wrong value, falls back to 150ms. Functional but cosmetic log noise. |
-| `CMD NAK: mnemonic=b'XL' error=0x07` | Minor | XL (XLINK) not supported by PK-232MBX firmware v7.1 — expected NAK |
-| `CMD NAK: mnemonic=b'EE' error=0x07` | Minor | EE not supported — expected NAK |
-| Testplan T18 (multi-cycle colour) | Open | Not formally tested yet |
-| T30–T51 Packet tests | Open | Screen/focus tests passing; AX.25 TX/RX integration pending |
+| `MSPEED 20 Baud → 150ms/char` in log | Minor | Falls back to 150ms — cosmetic log noise |
+| `CMD NAK: mnemonic=b'XL' error=0x07` | Minor | XL not supported by v7.1 — expected |
+| `CMD NAK: mnemonic=b'EE' error=0x07` | Minor | EE not supported — expected |
+| HFPacket/VHFPacket: CMD_RESP reaches mode | Minor | `handle_frame()` logs "unhandled frame" for ACKs — harmless |
+| T18 (multi-cycle colour) | Open | Not formally tested |
+| T32 HF Packet init frames | Open | Not tested |
 
 ---
 
-*OE3GAS | PK232PY Project | 2026-05-05*
+*OE3GAS | PK232PY Project | 2026-06-14*
