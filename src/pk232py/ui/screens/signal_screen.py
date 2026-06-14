@@ -369,6 +369,20 @@ class SignalScreen(QWidget):
         )
         root.addWidget(self.rx_log, stretch=1)
 
+        # Clear-RX row — receive-only screen clears itself.
+        clear_row = QHBoxLayout()
+        clear_row.addStretch()
+        self.btn_clear_rx = QPushButton("Clear RX")
+        self.btn_clear_rx.setFixedWidth(BTN_W)
+        self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_rx.clicked.connect(self._on_clear_rx)
+        clear_row.addWidget(self.btn_clear_rx)
+        root.addLayout(clear_row)
+
+    def _on_clear_rx(self) -> None:
+        """Clear the SIAM analysis log (receive-only, local state)."""
+        self.rx_log.clear()
+
     # ------------------------------------------------------------------
     # Analyse-Steuerung
     # ------------------------------------------------------------------
