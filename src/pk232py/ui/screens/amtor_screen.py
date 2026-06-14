@@ -38,7 +38,7 @@ from PyQt6.QtWidgets import (
     QTextEdit, QLineEdit, QPushButton,
     QFrame, QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
@@ -114,6 +114,10 @@ class AmtorScreen(QWidget):
     │  [Macro 1]…[Macro 6]                    [Edit Macros]   │
     └─────────────────────────────────────────────────────────┘
     """
+
+    # Signals connected automatically by MainWindow._wire_mode_callbacks()
+    clear_tx_req = pyqtSignal()   # emitted by the "Clear TX" button
+    clear_rx_req = pyqtSignal()   # emitted by the "Clear RX" button
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -398,6 +402,20 @@ class AmtorScreen(QWidget):
             self.macro_buttons.append(btn)
 
         macro_row.addStretch()
+
+        # Clear TX / Clear RX — emit signals; MainWindow does the actual work.
+        # NoFocus so a mouse click never steals keyboard focus from TX window.
+        self.btn_clear_tx = QPushButton("Clear TX")
+        self.btn_clear_tx.setFixedWidth(BTN_W)
+        self.btn_clear_tx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_tx.clicked.connect(self.clear_tx_req.emit)
+        macro_row.addWidget(self.btn_clear_tx)
+
+        self.btn_clear_rx = QPushButton("Clear RX")
+        self.btn_clear_rx.setFixedWidth(BTN_W)
+        self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_rx.clicked.connect(self.clear_rx_req.emit)
+        macro_row.addWidget(self.btn_clear_rx)
 
         self.btn_edit_macros = QPushButton("Edit Macros")
         self.btn_edit_macros.setFixedWidth(BTN_W + 20)
