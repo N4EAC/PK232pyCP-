@@ -109,10 +109,12 @@ PHASING_BLACK_FRAC = 0.05    # narrow black sync pulse at the start of each
 
 # --- Image geometry ---------------------------------------------------------
 IMG_WIDTH     = 1152         # pixels per line (~2 * IOC for IOC 576)
-NUM_LINES     = 300          # image height in lines.
-                             # 300 lines = 150 s of image at 120 LPM.
-                             # Full-spec weather charts use 600 (= 300 s); bump
-                             # this if you want a longer, more realistic file.
+NUM_LINES     = 600          # image height in lines.
+                             # 600 lines = 300 s of image at 120 LPM = full-spec
+                             # WEFAX chart. Must be >= IMG_WIDTH//2 (the test
+                             # pattern's circle diameter) or the circle gets
+                             # clipped top/bottom. Set to 300 only for quick
+                             # smoke tests where geometry fidelity is irrelevant.
 
 # --- Text rendering (WAV 3) -------------------------------------------------
 TEXT_DPI      = 96           # assumed display DPI for pt -> px conversion
@@ -330,7 +332,9 @@ def make_pattern_image() -> np.ndarray:
         x += vgap
 
     # --- centre: circle outline, diameter = 50% of width --------------------
-    diameter = IMG_WIDTH // 2          # 576 px
+    # Clamp to NUM_LINES so the circle is never clipped top/bottom and stays
+    # round even on a short canvas. At NUM_LINES=600 this is the full 576 px.
+    diameter = min(IMG_WIDTH // 2, NUM_LINES - 8)   # 8 px breathing room
     cx, cy = IMG_WIDTH // 2, NUM_LINES // 2
     r = diameter // 2
     d.ellipse([cx - r, cy - r, cx + r, cy + r], outline=0, width=2)
