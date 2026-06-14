@@ -33,6 +33,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QComboBox, QSpinBox,
     QFrame, QSizePolicy, QGroupBox,
     QScrollArea, QFileDialog, QMessageBox,
+    QSlider,
 )
 from PyQt6.QtCore import Qt, QTimer, QSize
 from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QColor
@@ -49,15 +50,31 @@ from .opmode_rtty_base import (
 # ---------------------------------------------------------------------------
 
 FSPEED_TABLE = [
-    ("0 – 1.5 LPS  (90 LPM)",   90),
-    ("1 – 1   LPS  (60 LPM)",   60),
-    ("2 – 2   LPS  (120 LPM)",  120),   # Standard
-    ("3 – 3   LPS  (180 LPM)",  180),
-    ("4 – 4   LPS  (240 LPM)",  240),
+    ("FSPEED 0 — 1.5 LPS  (90 LPM)",    90),
+    ("FSPEED 1 — 1   LPS  (60 LPM)",    60),
+    ("FSPEED 2 — 2   LPS  (120 LPM)",  120),   # Standard
+    ("FSPEED 3 — 3   LPS  (180 LPM)",  180),
+    ("FSPEED 4 — 4   LPS  (240 LPM)",  240),
 ]
 
 # Standardbildbreite für WEFAX (Pixel pro Zeile)
-FAX_IMAGE_WIDTH = 800
+# WEFAX image width: pixels/line ≈ 2 × IOC
+# IOC 576 → ~1152 px  (HF weather fax standard, DWD/NOAA)
+# IOC 288 → ~576 px   (older systems)
+# Auto-detects from first received line — this is just the default.
+FAX_IMAGE_WIDTH = 1152
+
+# ASPECT table: (TNC value, IOC, received-to-display ratio, label)
+# ratio = how many received lines are merged into one display line
+# Source: AEA PK-232MBX manual (STABO edition)
+ASPECT_TABLE = [
+    (1, 288, 3, "ASPECT 1  —  IOC 288  —  ~576 px  —  Satellite images"),
+    (2, 576, 6, "ASPECT 2  —  IOC 576  —  ~1152 px —  Weather maps (standard)"),
+    (3, 550, 4, "ASPECT 3  —  IOC 550  —  ~1100 px —  Weather maps (narrow)"),
+    (4, 596, 2, "ASPECT 4  —  IOC 596  —  ~1192 px —  Weather maps (wide)"),
+]
+# Map TNC value → ratio for quick lookup
+ASPECT_RATIO: dict[int, int] = {a: r for a, _, r, _ in ASPECT_TABLE}
 
 
 # ---------------------------------------------------------------------------
@@ -77,6 +94,9 @@ class FaxImageWidget(QLabel):
         self._img_width  = width
         self._lines: list[bytes] = []
         self._faxneg = False
+        self._zoom: float = 1.0
+        self._line_height: int = 2   # display pixels per received line
+        self._qimage = None
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.setMinimumHeight(200)
         self.setSizePolicy(
@@ -91,17 +111,24 @@ class FaxImageWidget(QLabel):
         self.setPixmap(QPixmap.fromImage(img))
 
     def clear_image(self) -> None:
-        """Löscht das aktuelle Bild."""
+        """Löscht das aktuelle Bild und setzt Breite auf Standard zurück."""
         self._lines.clear()
+        self._img_width = FAX_IMAGE_WIDTH   # reset for next reception
+        self._qimage = None
         self._render_placeholder()
 
     def append_line(self, pixel_data: bytes) -> None:
         """Fügt eine Pixelzeile hinzu und aktualisiert die Anzeige.
 
+        Auto-detects image width from the first received line so the
+        widget adapts to whatever the TNC actually delivers.
+
         Args:
             pixel_data: Bytes mit Graustufenwerten (0=schwarz, 255=weiß).
-                        Länge sollte _img_width entsprechen.
         """
+        if not self._lines and len(pixel_data) > 10:
+            # First line: adopt its length as the image width
+            self._img_width = len(pixel_data)
         self._lines.append(pixel_data)
         self._redraw()
 
@@ -111,20 +138,66 @@ class FaxImageWidget(QLabel):
         if self._lines:
             self._redraw()
 
+    def set_zoom(self, factor: float) -> None:
+        """Scale the displayed image by *factor* (1.0 = 100%)."""
+        self._zoom = factor
+        if self._qimage is not None:
+            self._apply_zoom()
+
+    def set_line_height(self, px: int) -> None:
+        """Set how many display pixels each received line occupies.
+
+        px=1: compressed (original, 1 display pixel per data line)
+        px=2: standard  (default, matches typical WEFAX proportions)
+        px=3: expanded
+        px=4: very expanded
+        """
+        self._line_height = max(1, px)
+        if self._lines:
+            self._redraw()
+
+    def _apply_zoom(self) -> None:
+        """Apply current zoom to _qimage and update the pixmap."""
+        w = max(1, int(self._img_width * self._zoom))
+        h = max(1, int(len(self._lines) * self._zoom))
+        scaled = self._qimage.scaled(
+            w, h,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        self.setPixmap(QPixmap.fromImage(scaled))
+        self.setFixedSize(max(w, 200), max(h, 200))
+
     def _redraw(self) -> None:
-        """Baut das QImage aus allen gespeicherten Zeilen neu auf."""
-        h = len(self._lines)
-        if h == 0:
+        """Baut das QImage aus allen gespeicherten Zeilen neu auf.
+
+        Uses bytearray + QImage(data, w, h, bpl, format) constructor
+        to avoid scanLine() which returns a voidptr with unknown size
+        in PyQt6 and cannot be slice-assigned.
+        """
+        n = len(self._lines)
+        if n == 0:
             return
-        img = QImage(self._img_width, h, QImage.Format.Format_Grayscale8)
+        w  = self._img_width
+        lh = self._line_height
+        h  = n * lh
+
+        # One received line = lh display pixels (no merging)
+        buf = bytearray(w * h)
         for y, line in enumerate(self._lines):
-            # Zeile auf Bildbreite zuschneiden / auffüllen
-            row = (line[:self._img_width]).ljust(self._img_width, b'\x80')
-            for x, val in enumerate(row):
-                pixel = (255 - val) if self._faxneg else val
-                img.setPixel(x, y, QColor(pixel, pixel, pixel).rgb())
-        self.setPixmap(QPixmap.fromImage(img))
-        self.setFixedHeight(max(200, h))
+            raw = (line[:w]).ljust(w, b'\x80')
+            if self._faxneg:
+                row = bytes(255 - v for v in raw)
+            else:
+                row = bytes(raw)
+            offset = y * lh * w
+            for dy in range(lh):
+                buf[offset + dy * w : offset + dy * w + w] = row
+
+        img = QImage(buf, w, h, w, QImage.Format.Format_Grayscale8)
+        self._buf = buf
+        self._qimage = img.copy()
+        self._apply_zoom()
 
     def demo_fill(self, n_lines: int = 300) -> None:
         """Füllt das Bild mit einem Demo-Testmuster (Graustufenverlauf)."""
@@ -248,29 +321,21 @@ class FaxScreen(QWidget):
 
         param_layout.addSpacing(12)
 
-        # ASPECT SpinBox
+        # ASPECT ComboBox — IOC-based selection
         param_layout.addWidget(_lbl("ASPECT:"))
-        self.btn_asp_dn = _small_btn("−")
-        param_layout.addWidget(self.btn_asp_dn)
-        self.sb_aspect = QSpinBox()
-        self.sb_aspect.setRange(1, 6)
-        self.sb_aspect.setValue(2)
-        self.sb_aspect.setFixedWidth(45)
-        self.sb_aspect.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sb_aspect.setFont(QFont("Courier New", 10))
-        self.sb_aspect.setToolTip(
-            "Zeilendichte: aus 6 empfangenen Zeilen werden n gedruckt.\n"
-            "1 = gestreckt  ·  2 = Standard WEFAX  ·  6 = gestaucht"
+        self.combo_aspect = QComboBox()
+        for _a, _ioc, _r, _label in ASPECT_TABLE:
+            self.combo_aspect.addItem(_label)
+        self.combo_aspect.setCurrentIndex(1)   # default: ASPECT 2, IOC 576
+        self.combo_aspect.setFont(QFont("Courier New", 9))
+        self.combo_aspect.setToolTip(
+            "ASPECT: Zeilendichte (IOC).\n"
+            "ASPECT 2 / IOC 576 = Standard Wetterkarten (DWD, NOAA).\n"
+            "ASPECT 1 / IOC 288 = Satellitenbilder."
         )
-        param_layout.addWidget(self.sb_aspect)
-        self.btn_asp_up = _small_btn("+")
-        param_layout.addWidget(self.btn_asp_up)
-        self.btn_asp_dn.clicked.connect(
-            lambda: self.sb_aspect.setValue(self.sb_aspect.value() - 1)
-        )
-        self.btn_asp_up.clicked.connect(
-            lambda: self.sb_aspect.setValue(self.sb_aspect.value() + 1)
-        )
+        param_layout.addWidget(self.combo_aspect)
+        # Keep sb_aspect as hidden compatibility shim (MainWindow wires it)
+        self.sb_aspect = self.combo_aspect   # alias for compatibility
 
         param_layout.addSpacing(12)
 
@@ -344,6 +409,51 @@ class FaxScreen(QWidget):
 
         add_hline(root)
 
+        # --- Zoom-Regler -------------------------------------------------
+        zoom_row = QHBoxLayout()
+
+        # Horizontal zoom
+        zoom_row.addWidget(QLabel("Zoom:"))
+        self._zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self._zoom_slider.setRange(100, 300)   # 100% – 300%
+        self._zoom_slider.setValue(100)
+        self._zoom_slider.setTickInterval(25)
+        self._zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._zoom_slider.setFixedWidth(220)
+        self._zoom_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._zoom_slider.setToolTip("Horizontaler Zoom: 100% – 300%")
+        self._zoom_slider.valueChanged.connect(self._on_zoom_changed)
+        zoom_row.addWidget(self._zoom_slider)
+        self._zoom_label = QLabel("100%")
+        self._zoom_label.setFont(QFont("Courier New", 9))
+        self._zoom_label.setFixedWidth(42)
+        zoom_row.addWidget(self._zoom_label)
+
+        zoom_row.addSpacing(20)
+
+        # Vertical line height
+        zoom_row.addWidget(QLabel("Zeilenabstand:"))
+        self._lh_slider = QSlider(Qt.Orientation.Horizontal)
+        self._lh_slider.setRange(1, 4)    # 1–4 px per line
+        self._lh_slider.setValue(2)       # default: 2px (standard WEFAX)
+        self._lh_slider.setTickInterval(1)
+        self._lh_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._lh_slider.setFixedWidth(100)
+        self._lh_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._lh_slider.setToolTip(
+            "Zeilenhöhe: 1–4 Pixel pro empfangener Zeile.\n"
+            "2 = Standard WEFAX  ·  1 = komprimiert  ·  4 = gedehnt"
+        )
+        self._lh_slider.valueChanged.connect(self._on_lh_changed)
+        zoom_row.addWidget(self._lh_slider)
+        self._lh_label = QLabel("2 px")
+        self._lh_label.setFont(QFont("Courier New", 9))
+        self._lh_label.setFixedWidth(36)
+        zoom_row.addWidget(self._lh_label)
+
+        zoom_row.addStretch()
+        root.addLayout(zoom_row)
+
         # --- Bild-Scroll-Bereich -----------------------------------------
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -358,6 +468,21 @@ class FaxScreen(QWidget):
         scroll.setWidget(self.fax_image)
 
         root.addWidget(scroll, stretch=1)
+
+        # Clear-Image row — receive-only screen clears its own image buffer.
+        clear_row = QHBoxLayout()
+        clear_row.addStretch()
+        self.btn_clear_image = QPushButton("Clear Image")
+        self.btn_clear_image.setFixedWidth(BTN_W + 20)
+        self.btn_clear_image.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_clear_image.clicked.connect(self._on_clear_image)
+        clear_row.addWidget(self.btn_clear_image)
+        root.addLayout(clear_row)
+
+    def _on_clear_image(self) -> None:
+        """Clear the received FAX image and reset the line counter."""
+        self.fax_image.clear_image()
+        self.lbl_lines.setText("Zeilen: 0")
 
     # ------------------------------------------------------------------
     # Demo-Modus
@@ -429,6 +554,33 @@ class FaxScreen(QWidget):
     # ------------------------------------------------------------------
     # Hilfsmethoden
     # ------------------------------------------------------------------
+
+    def _on_zoom_changed(self, value: int) -> None:
+        """Zoom slider moved — rescale the FAX image display."""
+        factor = value / 100.0
+        self._zoom_label.setText(f"{value}%")
+        self.fax_image.set_zoom(factor)
+
+    def _on_lh_changed(self, value: int) -> None:
+        """Line height slider moved — change px per received line."""
+        self._lh_label.setText(f"{value} px")
+        self.fax_image.set_line_height(value)
+
+    def set_receiving(self, active: bool) -> None:
+        """Called by MainWindow when FAX mode is activated/deactivated.
+
+        Disables the Demo button while Host Mode is active so that
+        demo data cannot interfere with real TNC data.
+        """
+        self.btn_demo.setEnabled(not active)
+        if active:
+            self.btn_demo.setToolTip(
+                "Demo nicht verfügbar während TNC verbunden ist."
+            )
+        else:
+            self.btn_demo.setToolTip(
+                "Testbild animiert aufbauen (Mockup-Demo)"
+            )
 
     def _set_status(self, text: str, color: str) -> None:
         self.lbl_status.setText(f"●  {text}")
