@@ -76,6 +76,21 @@ except ImportError:  # pragma: no cover - clear guidance instead of a traceback
 
 
 # ===========================================================================
+# PATH ANCHORS  — resolve data files relative to THIS SCRIPT, not the CWD
+# ===========================================================================
+# LERNMODUS: a plain "Wetterkarte.jpg" candidate is interpreted relative to the
+# current working directory. That works when you launch from the repo root
+# (`python tools/fax_wav_generator.py`) but silently fails when you `cd tools`
+# first — the same relative name then points at tools/tools/... which does not
+# exist, and the generator either falls back to the decoded PNG or aborts.
+# Anchoring on __file__ makes the lookup independent of where you start from:
+# the script always knows where it lives on disk, so the candidate list below
+# resolves to the SAME absolute paths regardless of the CWD.
+_SCRIPT_DIR = Path(__file__).resolve().parent      # .../pk232py_repo/tools
+_REPO_ROOT  = _SCRIPT_DIR.parent                   # .../pk232py_repo
+
+
+# ===========================================================================
 # CONSTANTS  — every WEFAX / audio parameter lives here and is editable
 # ===========================================================================
 
@@ -138,12 +153,16 @@ _PREFERRED_FONTS = {"arial.ttf"}   # lower-cased basenames we treat as "Arial"
 # --- Reference weather chart (WAV 1) ----------------------------------------
 # /mnt/project/Wetterkarte.jpg is the Claude project-knowledge path; the
 # in-repo equivalent is wetterkarte_decoded.png (a real decoded weather fax).
+# All in-repo candidates are anchored on _SCRIPT_DIR / _REPO_ROOT (absolute),
+# so the lookup works whether you start from the repo root or from tools/.
+# The real file ships in tools/ -> that path is FIRST so it wins immediately.
 WEATHER_IMAGE_CANDIDATES = [
-    "Wetterkarte.jpg",
-    "wetterkarte.jpg",
-    "docs/Wetterkarte.jpg",
-    "/mnt/project/Wetterkarte.jpg",
-    "wetterkarte_decoded.png",          # in-repo decoded reference chart
+    _SCRIPT_DIR / "Wetterkarte.jpg",         # the real chart, ships in tools/
+    _REPO_ROOT  / "Wetterkarte.jpg",
+    _REPO_ROOT  / "docs" / "Wetterkarte.jpg",
+    _SCRIPT_DIR / "wetterkarte_decoded.png", # in-repo decoded reference chart
+    _REPO_ROOT  / "wetterkarte_decoded.png",
+    Path("/mnt/project/Wetterkarte.jpg"),    # Claude project-knowledge path
 ]
 
 # Lorem Ipsum source text (WAV 3)
@@ -287,16 +306,23 @@ def _fit_to_canvas(src: Image.Image) -> np.ndarray:
 
 
 def make_weather_image() -> np.ndarray:
-    """WAV 1 source: the real reference weather chart from the repo/project."""
+    """WAV 1 source: the real reference weather chart from the repo/project.
+
+    Candidates are absolute Paths anchored on the script location, so the
+    first existing one wins regardless of the current working directory. On
+    failure we list the ABSOLUTE paths we actually probed — the old message
+    printed CWD-relative names, which were useless for diagnosing the very
+    "launched from the wrong directory" problem this resolution scheme fixes.
+    """
     searched = []
     for cand in WEATHER_IMAGE_CANDIDATES:
-        searched.append(cand)
-        if os.path.isfile(cand):
+        cand = Path(cand)
+        searched.append(str(cand))
+        if cand.exists():
             print(f"  weather chart: using '{cand}'")
             return _fit_to_canvas(Image.open(cand))
     raise FileNotFoundError(
-        "Reference weather chart not found. Searched these paths "
-        "(relative to the current working directory):\n  - "
+        "Reference weather chart not found. Searched these absolute paths:\n  - "
         + "\n  - ".join(searched)
         + "\nPlace a grayscale weather chart at one of these paths and retry."
     )

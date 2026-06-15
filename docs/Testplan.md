@@ -1,6 +1,6 @@
 # PK232PY — Test Plan
-**Updated: 2026-06-14 (v16) — FAX closed-loop test tooling (T66–T68), clear buttons**
-**Previous stand: 2026-05-17 (v15)**
+**Updated: 2026-06-15 (v16) — FAX closed-loop tests T66–T68 formalised; clear buttons**
+**Previous stand: 2026-06-14 (v16) — FAX closed-loop test tooling, clear buttons**
 
 ---
 
@@ -389,37 +389,59 @@
 ## FAX closed-loop decode (tools/) — T66–T68
 
 Closed-loop test path: `tools/fax_wav_generator.py` → WAV →
-`tools/fax_decoder_test.py`. No TNC, radio or live audio. (Placeholders —
-detailed steps to be supplied.)
+`tools/fax_decoder_test.py`. No TNC, radio or live audio. Generator and
+decoder verified 2026-06-14; both decoder bugs (line-drift slant, header
+detection) fixed in the same session.
 
 ### T66 — FAX closed-loop: weather chart
-1. Generate `fax_test_wetterkarte.wav`, decode it (auto-detect headers)
+1. From repo root: `python tools/fax_wav_generator.py`
+   (generates all three WAVs into the current directory)
+2. `python tools/fax_decoder_test.py tools/fax_test_wetterkarte.wav`
+3. Mode = **Auto-detect headers**, LPM 120, IOC 576 → **Decode**
 
 **Expected result:**
-- Chart fully decoded, correct aspect, header start/stop detected
+- Decode succeeds (no "No image lines decoded" error)
+- Weather chart fully rendered, recognisable (isobars, H/T markers, coastline)
+- Status line: `Start line` set (small value), `Stop line` set,
+  `Phasing offset` small (~0), `image_height` ≈ 600
+- Width ≈ 905 px (IOC-576 derived — narrower than the 1152 px source; expected,
+  not a defect)
 
-**Status:** ⬜ OPEN (TODO: detailed steps)
+**Status:** ⬜ OPEN (needs local run)
 
 ---
 
 ### T67 — FAX closed-loop: geometry/resolution pattern
-1. Generate `fax_test_pattern.wav`, decode it (auto-detect headers)
+1. `python tools/fax_decoder_test.py tools/fax_test_pattern.wav`
+2. Decode once with **Auto-detect headers**, once with **Skip header detection**
 
 **Expected result:**
-- Circle round (no slant/parallelogram), vertical lines straight,
-  thickness bars distinguishable
+- Circle is **round**, centred — NOT an ellipse and NOT a slanted/sheared
+  parallelogram (verifies fractional-line-length fix: drift ≤ 0.02 px/line)
+- Vertical lines straight (no horizontal shear top-to-bottom)
+- Horizontal lines straight; thickness bars (1/2/4/8/16/32 px) individually
+  distinguishable down to the resolution limit
+- DIAGNOSIS POINTER: if the circle appears as an **ellipse**, LPM/IOC mismatch
+  (check both set to 120 / 576); if it appears as a **parallelogram**, the
+  line-drift slant has regressed (fractional line bounds in decode_wav)
 
-**Status:** ⬜ OPEN (TODO: detailed steps)
+**Status:** ⬜ OPEN (needs local run)
 
 ---
 
-### T68 — FAX closed-loop: text page
-1. Generate `fax_test_text.wav`, decode it (skip-header + auto-detect)
+### T68 — FAX closed-loop: text page (slant regression check)
+1. `python tools/fax_decoder_test.py tools/fax_test_text.wav`
+2. Decode with **Skip header detection** first, then **Auto-detect headers**
 
 **Expected result:**
-- Lorem-Ipsum legible, lines start in the same column (no slant), Arial metric
+- Lorem-Ipsum text legible, Arial metric intact
+- Skip-header mode: first and last text line start in the **same column**
+  (left-margin drift ≈ 0, measured ~0.0124 px/line — no parallelogram)
+- Auto-detect mode: top phasing band and trailing black bar are **trimmed**
+  (only the clean text block remains) — confirms header start/stop detection
+- Status line: `Start line` set, `Stop line` set, `Phasing offset` small
 
-**Status:** ⬜ OPEN (TODO: detailed steps)
+**Status:** ⬜ OPEN (needs local run)
 
 ---
 
@@ -432,7 +454,7 @@ detailed steps to be supplied.)
 | Medium | Packet toggles/buttons | T43–T51 |
 | Medium | PACTOR/AMTOR identity, focus | T52–T58 |
 | Low | APRS buffer on mode switch | T65 |
-| Medium | FAX closed-loop decode (tools/) — detailed steps TODO | T66–T68 |
+| Medium | FAX closed-loop decode (tools/) — steps written, local run pending | T66–T68 |
 | Low | Multi-cycle RTTY colour | T18 |
 | Low | Macro full integration | T19–T22 |
 | Low | Help Viewer | T27–T28 |
@@ -459,4 +481,4 @@ detailed steps to be supplied.)
 
 ---
 
-*Created: 2026-05-01 | Updated: 2026-06-14 (v16) | OE3GAS | PK232PY Project*
+*Created: 2026-05-01 | Updated: 2026-06-15 (v16) | OE3GAS | PK232PY Project*
