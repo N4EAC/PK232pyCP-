@@ -151,13 +151,18 @@ FONT_CANDIDATES = [
 _PREFERRED_FONTS = {"arial.ttf"}   # lower-cased basenames we treat as "Arial"
 
 # --- Reference weather chart (WAV 1) ----------------------------------------
-# /mnt/project/Wetterkarte.jpg is the Claude project-knowledge path; the
-# in-repo equivalent is wetterkarte_decoded.png (a real decoded weather fax).
+# The committed, copyright-free fixture is FIRST so T66 is reproducible for
+# everyone: tools/synthetic_weatherchart.png is generated deterministically by
+# make_synthetic_weatherchart.py (regenerate with `python
+# tools/make_synthetic_weatherchart.py`). The real DWD chart
+# (tools/Wetterkarte.jpg, © Deutscher Wetterdienst) is NOT in the repo for
+# copyright reasons — it stays as a lower-priority local fallback, as does the
+# decoded reference PNG and the Claude project-knowledge path.
 # All in-repo candidates are anchored on _SCRIPT_DIR / _REPO_ROOT (absolute),
 # so the lookup works whether you start from the repo root or from tools/.
-# The real file ships in tools/ -> that path is FIRST so it wins immediately.
 WEATHER_IMAGE_CANDIDATES = [
-    _SCRIPT_DIR / "Wetterkarte.jpg",         # the real chart, ships in tools/
+    _SCRIPT_DIR / "synthetic_weatherchart.png",  # committed, copyright-free (T66)
+    _SCRIPT_DIR / "Wetterkarte.jpg",         # real DWD chart, local only (gitignored)
     _REPO_ROOT  / "Wetterkarte.jpg",
     _REPO_ROOT  / "docs" / "Wetterkarte.jpg",
     _SCRIPT_DIR / "wetterkarte_decoded.png", # in-repo decoded reference chart
