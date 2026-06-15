@@ -107,9 +107,19 @@ class TxController(QObject):
     # ── Public API ────────────────────────────────────────────────────
 
     def set_mspeed(self, baud: int) -> None:
-        """Set TX rate. Called from MSPEED config parameter."""
+        """Set TX rate from a Baud value (Baudot/ASCII). Maps via BAUD_RATES."""
         self._mspeed_ms = self.BAUD_RATES.get(baud, 150)
         logger.debug("MSPEED %d Baud → %dms/char", baud, self._mspeed_ms)
+
+    def set_mspeed_ms(self, ms: int) -> None:
+        """Set the inter-character TX interval directly in milliseconds.
+
+        For modes without a meaningful Baud rate (e.g. CW/Morse, where the TNC
+        controls WPM timing). The controller is then ACK-paced and this interval
+        acts only as a buffer-overflow safety net, NOT as tempo control.
+        """
+        self._mspeed_ms = max(1, int(ms))
+        logger.debug("MSPEED set directly → %dms/char", self._mspeed_ms)
 
     def on_char_typed(self, char: str, display: str) -> None:
         """Called on every keystroke — regardless of SEND/RECEIVE state.

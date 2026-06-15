@@ -58,6 +58,11 @@ logger = logging.getLogger(__name__)
 
 APP_TITLE = "PK232PY"
 
+# CW/Morse: the TNC controls WPM timing, so the TxController is ACK-paced and
+# its inter-character timer is only a buffer-overflow safety net (not tempo
+# control). Adjustable on hardware test: flow stalls → lower; overflow → raise.
+_MORSE_TXCTRL_MS = 50
+
 
 class MainWindow(QMainWindow):
     """Main application window.
@@ -1268,20 +1273,27 @@ class MainWindow(QMainWindow):
         self._wire_navtex_filters(screen)
         self._wire_fax_buttons(screen)
 
-        # char_ready: legacy signal — kept for non-Baudot modes
-        if hasattr(screen, "char_ready"):
+        # TX wiring. TxController-driven modes (Baudot/ASCII/Morse) feed the
+        # controller via TxInputWidget.char_typed; legacy modes (AMTOR until 2b)
+        # use the screen's char_ready signal. Compute both facts once.
+        mode = self._modes.current_mode
+        is_rtty = self._is_txctrl_mode(mode)
+        tx = getattr(screen, "tx_input", None)
+        tx_has_char_typed = tx is not None and hasattr(tx, "char_typed")
+
+        # char_ready: legacy signal — ONLY for screens without a TxInputWidget.
+        # The "not tx_has_char_typed" guard prevents double-send: a
+        # TxController-driven screen must never also feed the legacy
+        # char_ready → _on_rtty_char_ready path.
+        if hasattr(screen, "char_ready") and not tx_has_char_typed:
             try:
                 screen.char_ready.disconnect(self._on_rtty_char_ready)
             except (RuntimeError, TypeError):
                 pass
             screen.char_ready.connect(self._on_rtty_char_ready)
 
-        # char_typed: TxInputWidget signal → TxController (Baudot/ASCII)
-        # Wired only for screens that have TxInputWidget (char_typed signal).
-        mode = self._modes.current_mode
-        is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
-        tx = getattr(screen, "tx_input", None)
-        if is_rtty and tx is not None and hasattr(tx, "char_typed"):
+        # char_typed: TxInputWidget signal → TxController (Baudot/ASCII/Morse).
+        if is_rtty and tx_has_char_typed:
             try:
                 tx.char_typed.disconnect(self._tx_ctrl.on_char_typed)
             except (RuntimeError, TypeError):
@@ -1327,12 +1339,18 @@ class MainWindow(QMainWindow):
             except (RuntimeError, TypeError):
                 pass
             self._tx_ctrl.warning.connect(self._on_baudot_warning)
-            # Set MSPEED from config
-            try:
-                mspeed = int(self._app_config.baudot.mspeed)
-                self._tx_ctrl.set_mspeed(mspeed)
-            except Exception:
-                pass
+            # Controller TX pacing.
+            #   Baudot/ASCII: rate-limited to the configured Baud rate.
+            #   Morse: TNC controls WPM; controller is ACK-paced, so the timer
+            #          is only a buffer-overflow safety net (_MORSE_TXCTRL_MS).
+            if mode.name == "CW / Morse":
+                self._tx_ctrl.set_mspeed_ms(_MORSE_TXCTRL_MS)
+            else:
+                try:
+                    mspeed = int(self._app_config.baudot.mspeed)
+                    self._tx_ctrl.set_mspeed(mspeed)
+                except Exception:
+                    pass
 
         # Clear TX / Clear RX buttons
         for sig, slot in [
@@ -1358,6 +1376,17 @@ class MainWindow(QMainWindow):
                     lambda checked=False, idx=i, s=screen: self._on_macro_clicked(idx, s)
                 )
 
+    def _is_txctrl_mode(self, mode) -> bool:
+        """True for modes driven by TxController (char-ACK + EOT marker).
+
+        These use TxInputWidget.char_typed → TxController.on_char_typed and the
+        ACK-paced send path (colour tracking, [^D] EOT). AMTOR is intentionally
+        NOT here — it stays on the legacy path until package 2b.
+        """
+        return mode is not None and mode.name in (
+            "Baudot RTTY", "ASCII RTTY", "CW / Morse"
+        )
+
     def _on_screen_send(self, active: bool) -> None:
         """Called when the SEND button on the active screen is toggled.
 
@@ -1382,7 +1411,7 @@ class MainWindow(QMainWindow):
         from pk232py.comm.frame import build_command
 
         mode = self._modes.current_mode
-        is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
+        is_rtty = self._is_txctrl_mode(mode)
 
         if active:
             self._send_active = True
@@ -1390,10 +1419,11 @@ class MainWindow(QMainWindow):
             xmit = build_command(b'XM')
             self._serial.send_command(xmit[2:4], xmit[4:-1])
             self._log_monitor("[TX] XMIT — PTT ON, DIDDLE started")
-            # For Baudot/ASCII: TxController.on_send_start() is called
-            # when XM ACK arrives via _on_frame_received → _on_baudot_xm_ack.
-            # The controller then flushes unsent chars at the configured Baud rate.
-            # For other modes: flush via legacy 300ms timer.
+            # For TxController modes (Baudot/ASCII/Morse): on_send_start() is
+            # called when XM ACK arrives via _on_frame_received →
+            # _on_baudot_xm_ack. The controller then flushes unsent chars
+            # (Baudot/ASCII rate-limited by Baud; Morse ACK-paced).
+            # For other modes (AMTOR): flush via legacy 300ms timer.
             if not is_rtty:
                 unsent_chars = tx.toPlainText()
                 if unsent_chars:
@@ -1586,13 +1616,14 @@ class MainWindow(QMainWindow):
     def _on_rtty_data_ack(self) -> None:
         """Called when TNC sends DATA_ACK ($5F XX XX $00) for a sent char.
 
-        For Baudot/ASCII: delegates to TxController.on_data_ack()
-        which handles colour_at() and show_in_rx via signals.
+        For TxController modes (Baudot/ASCII/Morse): delegates to
+        TxController.on_data_ack() which handles colour_at() and show_in_rx
+        via signals.
 
-        For other modes: legacy inline handling.
+        For other modes (AMTOR): legacy inline handling.
         """
         mode = self._modes.current_mode
-        is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
+        is_rtty = self._is_txctrl_mode(mode)
         if is_rtty:
             self._tx_ctrl.on_data_ack()
             return
@@ -3244,11 +3275,11 @@ class MainWindow(QMainWindow):
         if self._act_serial_status.isChecked():
             self._blink_rx()
 
-        # XM ACK → TxController for Baudot/ASCII
+        # XM ACK → TxController for Baudot/ASCII/Morse
         if frame.kind == FrameKind.CMD_RESP and frame.mnemonic == b'XM':
             if len(frame.data) >= 3 and frame.data[2] == 0x00:
                 mode = self._modes.current_mode
-                if mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY"):
+                if self._is_txctrl_mode(mode):
                     self._on_baudot_xm_ack()
 
         # PTT indicator + OPMODE response display

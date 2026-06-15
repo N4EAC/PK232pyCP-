@@ -42,7 +42,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
-    MacroStore, MacroEditDialog,
+    MacroStore, MacroEditDialog, TxInputWidget,
     make_toggle_button, add_hline, apply_app_style,
     style_rx_widget, style_tx_widget,
     BTN_W, SPACING, MACRO_COUNT,
@@ -326,8 +326,11 @@ class MorseScreen(QWidget):
 
         add_hline(root)
 
-        # --- TX-Fenster (5 Zeilen) ----------------------------------------
-        self.tx_input = QTextEdit()
+        # --- TX-Fenster (5 Zeilen) — TxInputWidget für char-level ACK-Tracking
+        # Wie Baudot/ASCII: liefert char_typed, [^D]/[^T]-Marker-Handling,
+        # Edit-Schutz und colour_at(). Ersetzt das frühere einfache QTextEdit
+        # (Legacy char_ready-Pfad), damit Morse den TxController nutzen kann.
+        self.tx_input = TxInputWidget()
         self.tx_input.setFont(QFont("Courier New", 10))
         self.tx_input.setPlaceholderText(
             "TX – Eingabe hier …  (Sonderzeichen: * = SK,  + = AR,  = = BT)"
