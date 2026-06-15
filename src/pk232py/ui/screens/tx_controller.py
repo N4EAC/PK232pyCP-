@@ -1,8 +1,8 @@
 """
-baudot_tx_controller.py — Baudot TX State Machine
-==================================================
+tx_controller.py — TX State Machine
+===================================
 
-Pure state machine for Baudot TX/RX logic.
+Pure state machine for character-ACK TX/RX logic (Baudot, ASCII, Morse, AMTOR).
 No serial I/O, no Qt widgets — only signals and state.
 
 Proven in baudot_tx_test.py (2026-05-02).
@@ -21,7 +21,7 @@ EOT marker (see TX_STATE_MACHINE.md §11):
     char == '\\x04' → [^D] visible in TX, triggers RECEIVE when reached.
 
 Usage in MainWindow / BaudotScreen:
-    ctrl = BaudotTxController(parent=self)
+    ctrl = TxController(parent=self)
     ctrl.set_mspeed(50)                    # from TNC config MSPEED
     ctrl.colour_char.connect(...)          # colour TX char green
     ctrl.show_in_rx.connect(...)           # show ACK'd char in RX
@@ -49,10 +49,10 @@ from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 logger = logging.getLogger(__name__)
 
 
-class BaudotTxController(QObject):
-    """Pure TX/RX state machine for Baudot mode.
+class TxController(QObject):
+    """Pure TX/RX state machine for character-ACK modes (Baudot, ASCII, Morse, AMTOR).
 
-    No serial I/O, no widget references.
+    No serial I/O, no widget references — only signals and state.
     Communicates entirely via Qt signals.
 
     Signals

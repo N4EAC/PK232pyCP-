@@ -52,7 +52,7 @@ from .screens.signal_screen  import SignalScreen
 from .screens.fax_screen     import FaxScreen
 from .screens.pactor_screen  import PactorScreen
 from .screens.packet_screen  import HFPacketScreen, VHFPacketScreen
-from .screens.baudot_tx_controller import BaudotTxController
+from .screens.tx_controller import TxController
 
 logger = logging.getLogger(__name__)
 
@@ -86,11 +86,11 @@ class MainWindow(QMainWindow):
         # Shared TX/RX content preserved across mode switches.
         self._shared_tx_text: str = ""
         self._shared_rx_doc  = None  # QTextDocument or None
-        # BaudotTxController — rate-limited TX with DATA_ACK tracking.
+        # TxController — rate-limited TX with DATA_ACK tracking (character-ACK modes).
         # Proven in baudot_tx_test.py (2026-05-02).
         # Handles: char buffering, rate-limited send, colour_at, EOT marker.
-        self._baudot_ctrl = BaudotTxController(self)
-        self._baudot_ctrl.set_mspeed(50)   # default 50 Baud — updated from config
+        self._tx_ctrl = TxController(self)
+        self._tx_ctrl.set_mspeed(50)   # default 50 Baud — updated from config
         # Re-entry guard for eventFilter.
         self._in_event_filter: bool = False
         # Flag: True when user explicitly requested Host Mode exit
@@ -1276,61 +1276,61 @@ class MainWindow(QMainWindow):
                 pass
             screen.char_ready.connect(self._on_rtty_char_ready)
 
-        # char_typed: TxInputWidget signal → BaudotTxController (Baudot/ASCII)
+        # char_typed: TxInputWidget signal → TxController (Baudot/ASCII)
         # Wired only for screens that have TxInputWidget (char_typed signal).
         mode = self._modes.current_mode
         is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
         tx = getattr(screen, "tx_input", None)
         if is_rtty and tx is not None and hasattr(tx, "char_typed"):
             try:
-                tx.char_typed.disconnect(self._baudot_ctrl.on_char_typed)
+                tx.char_typed.disconnect(self._tx_ctrl.on_char_typed)
             except (RuntimeError, TypeError):
                 pass
-            tx.char_typed.connect(self._baudot_ctrl.on_char_typed)
+            tx.char_typed.connect(self._tx_ctrl.on_char_typed)
             # Controller → screen: colour ACK'd chars + show in RX
             try:
-                self._baudot_ctrl.colour_char.disconnect()
+                self._tx_ctrl.colour_char.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.colour_char.connect(
+            self._tx_ctrl.colour_char.connect(
                 lambda idx, s, _tx=tx: _tx.colour_at(idx, s)
             )
             try:
-                self._baudot_ctrl.show_in_rx.disconnect()
+                self._tx_ctrl.show_in_rx.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.show_in_rx.connect(self._on_baudot_rx_char)
+            self._tx_ctrl.show_in_rx.connect(self._on_baudot_rx_char)
             try:
-                self._baudot_ctrl.send_to_tnc.disconnect()
+                self._tx_ctrl.send_to_tnc.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.send_to_tnc.connect(self._on_baudot_send_char)
+            self._tx_ctrl.send_to_tnc.connect(self._on_baudot_send_char)
             try:
-                self._baudot_ctrl.eot_reached.disconnect()
+                self._tx_ctrl.eot_reached.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.eot_reached.connect(self._on_baudot_eot)
+            self._tx_ctrl.eot_reached.connect(self._on_baudot_eot)
             try:
-                self._baudot_ctrl.timed_send_reached.disconnect()
+                self._tx_ctrl.timed_send_reached.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.timed_send_reached.connect(self._on_baudot_timed_send)
+            self._tx_ctrl.timed_send_reached.connect(self._on_baudot_timed_send)
             try:
-                self._baudot_ctrl.status_msg.disconnect()
+                self._tx_ctrl.status_msg.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.status_msg.connect(
+            self._tx_ctrl.status_msg.connect(
                 lambda m: self.statusBar().showMessage(m, 3000)
             )
             try:
-                self._baudot_ctrl.warning.disconnect()
+                self._tx_ctrl.warning.disconnect()
             except (RuntimeError, TypeError):
                 pass
-            self._baudot_ctrl.warning.connect(self._on_baudot_warning)
+            self._tx_ctrl.warning.connect(self._on_baudot_warning)
             # Set MSPEED from config
             try:
                 mspeed = int(self._app_config.baudot.mspeed)
-                self._baudot_ctrl.set_mspeed(mspeed)
+                self._tx_ctrl.set_mspeed(mspeed)
             except Exception:
                 pass
 
@@ -1390,7 +1390,7 @@ class MainWindow(QMainWindow):
             xmit = build_command(b'XM')
             self._serial.send_command(xmit[2:4], xmit[4:-1])
             self._log_monitor("[TX] XMIT — PTT ON, DIDDLE started")
-            # For Baudot/ASCII: BaudotTxController.on_send_start() is called
+            # For Baudot/ASCII: TxController.on_send_start() is called
             # when XM ACK arrives via _on_frame_received → _on_baudot_xm_ack.
             # The controller then flushes unsent chars at the configured Baud rate.
             # For other modes: flush via legacy 300ms timer.
@@ -1406,16 +1406,16 @@ class MainWindow(QMainWindow):
             self._send_active = False
             # Baudot/ASCII: stop rate-limited send, update cycle anchors
             if is_rtty and hasattr(tx, "char_typed"):
-                self._baudot_ctrl.on_send_stop()
+                self._tx_ctrl.on_send_stop()
                 # doc_offset must be the actual document position, not the
                 # array index. tx.document().characterCount()-1 gives the
                 # exact position where new chars will be inserted.
                 doc_len = tx.document().characterCount() - 1
                 tx.set_cycle_anchor(
                     doc_len,
-                    self._baudot_ctrl.cycle_start
+                    self._tx_ctrl.cycle_start
                 )
-                if self._baudot_ctrl.still_to_transmit():
+                if self._tx_ctrl.still_to_transmit():
                     # Show warning in status bar only — not in RX window.
                     # RX window spam with "Still text" on every RECEIVE
                     # press while rate-limited chars are queued is confusing.
@@ -1566,10 +1566,10 @@ class MainWindow(QMainWindow):
                 tx.set_cycle_anchor(0, 0)
         # Preserve send_active state — clear resets _arr but PTT stays on
         was_sending = self._send_active
-        self._baudot_ctrl.clear()
+        self._tx_ctrl.clear()
         if was_sending:
             # Restore send_active so new chars are queued immediately
-            self._baudot_ctrl._send_active = True
+            self._tx_ctrl._send_active = True
         self._shared_tx_text = ""
         self._log_monitor("[SYS] TX buffer cleared")
 
@@ -1586,7 +1586,7 @@ class MainWindow(QMainWindow):
     def _on_rtty_data_ack(self) -> None:
         """Called when TNC sends DATA_ACK ($5F XX XX $00) for a sent char.
 
-        For Baudot/ASCII: delegates to BaudotTxController.on_data_ack()
+        For Baudot/ASCII: delegates to TxController.on_data_ack()
         which handles colour_at() and show_in_rx via signals.
 
         For other modes: legacy inline handling.
@@ -1594,7 +1594,7 @@ class MainWindow(QMainWindow):
         mode = self._modes.current_mode
         is_rtty = mode is not None and mode.name in ("Baudot RTTY", "ASCII RTTY")
         if is_rtty:
-            self._baudot_ctrl.on_data_ack()
+            self._tx_ctrl.on_data_ack()
             return
 
         # Legacy: non-RTTY modes (AMTOR, Morse, etc.)
@@ -1613,15 +1613,15 @@ class MainWindow(QMainWindow):
         rx.setTextCursor(cursor)
         rx.ensureCursorVisible()
 
-    # ── BaudotTxController helpers ───────────────────────────────────────
+    # ── TxController helpers ───────────────────────────────────────
 
     def _on_baudot_xm_ack(self) -> None:
         """Called when XM ACK arrives — start rate-limited send."""
-        self._baudot_ctrl.on_send_start()
-        self._log_monitor("[TX] XM ACK — BaudotTxController sending")
+        self._tx_ctrl.on_send_start()
+        self._log_monitor("[TX] XM ACK — TxController sending")
 
     def _on_baudot_send_char(self, char: str) -> None:
-        """Send one character to TNC (called by BaudotTxController.send_to_tnc)."""
+        """Send one character to TNC (called by TxController.send_to_tnc)."""
         if not self._serial.is_connected or not self._serial.is_host_mode:
             return
         if char in ('\r\n', '\n'):
@@ -1678,7 +1678,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(n * 1000, _auto_send)
 
     def _on_baudot_warning(self, msg: str) -> None:
-        """Handle warnings from BaudotTxController.
+        """Handle warnings from TxController.
 
         BUFFER_FULL → modal QMessageBox (must be acknowledged).
         A flag prevents repeated dialogs while the box is open — the
@@ -1868,13 +1868,13 @@ class MainWindow(QMainWindow):
         logger.info("RBAUD set to %d Bd", baud)
         self._log_monitor(f"[PARAM] RBAUD → {baud} Bd")
 
-        # Also update BaudotTxController rate-limited TX speed.
+        # Also update TxController rate-limited TX speed.
         # Without this, the controller stays at the default 50 Baud
         # regardless of what the user selects in the RBAUD dropdown.
         mode_name = mode.name if mode is not None else ""
         if mode_name in ("Baudot RTTY", "ASCII RTTY"):
-            self._baudot_ctrl.set_mspeed(baud)
-            logger.info("BaudotTxController MSPEED → %d Baud", baud)
+            self._tx_ctrl.set_mspeed(baud)
+            logger.info("TxController MSPEED → %d Baud", baud)
 
     def _wire_amtor_buttons(self, screen) -> None:
         """Connect AMTOR mode buttons to TNC commands.
@@ -3238,13 +3238,13 @@ class MainWindow(QMainWindow):
         which is also connected to frame_received.
 
         Additionally: intercept XM ACK (CMD_RESP, mnemonic=XM, status=0x00)
-        to trigger BaudotTxController.on_send_start() for Baudot/ASCII modes.
+        to trigger TxController.on_send_start() for Baudot/ASCII modes.
         """
         # RX blink
         if self._act_serial_status.isChecked():
             self._blink_rx()
 
-        # XM ACK → BaudotTxController for Baudot/ASCII
+        # XM ACK → TxController for Baudot/ASCII
         if frame.kind == FrameKind.CMD_RESP and frame.mnemonic == b'XM':
             if len(frame.data) >= 3 and frame.data[2] == 0x00:
                 mode = self._modes.current_mode
@@ -3357,7 +3357,7 @@ class MainWindow(QMainWindow):
         )
         if active:
             # Clear TX controller — fresh state for new Host Mode session
-            self._baudot_ctrl.clear()
+            self._tx_ctrl.clear()
             screen = self._opmode_stack.currentWidget()
             tx = getattr(screen, 'tx_input', None)
             if tx is not None:

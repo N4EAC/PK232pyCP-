@@ -22,7 +22,7 @@ What the subclass provides:
 Refactored 2026-05-03:
     Theme system  → ui_theme.py
     MacroStore    → macro_store.py
-    TX controller → baudot_tx_controller.py
+    TX controller → tx_controller.py
 """
 
 from __future__ import annotations
@@ -143,7 +143,7 @@ class TxInputWidget(QTextEdit):
     """
 
     # Emitted on every printable keystroke and paste.
-    # Connected by MainWindow to BaudotTxController.on_char_typed().
+    # Connected by MainWindow to TxController.on_char_typed().
     char_typed = pyqtSignal(str, str)   # (char, display)
 
     def __init__(self, parent=None):
@@ -248,13 +248,13 @@ class TxInputWidget(QTextEdit):
         if not paste_chars:
             return
 
-        # Find BaudotTxController — stored directly on widget if wired,
+        # Find TxController — stored directly on widget if wired,
         # otherwise search parent chain as fallback.
         ctrl = getattr(self, '_ctrl_ref', None)
         if ctrl is None:
             p = self.parent()
             while p is not None:
-                c = getattr(p, '_baudot_ctrl', None)
+                c = getattr(p, '_tx_ctrl', None)
                 if c is not None:
                     ctrl = c
                     self._ctrl_ref = ctrl   # cache for next paste
