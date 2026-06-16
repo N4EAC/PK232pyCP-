@@ -52,55 +52,34 @@ T33–T39 require a second AX.25 station.*
   file (e.g. `tools/Wetterkarte.jpg`), so it falls back to
   `wetterkarte_decoded.png`. Extend the candidate list.
 
-### TxController — CTRL+D EOT + Stop Sending (Paket 2b + Paket 3 offen)
+### TxController — CTRL+D EOT (Status nach Paket 2a/2b)
 
-**Architektur-Entscheidungen (Session 2026-06-16, verifiziert gegen
-Technical Reference Manual und Bedienungsanleitung):**
+**Paket 1 — Umbenennung (erledigt, cc2adff):**
+`BaudotTxController` → `TxController`, Datei `tx_controller.py`,
+Attribut `self._tx_ctrl`. Neue Methode `set_mspeed_ms(ms)` für Modes
+ohne sinnvolle Baudrate.
 
-- `BaudotTxController` umbenannt zu `TxController` (Paket 1, committet
-  cc2adff). Klasse, Datei (`tx_controller.py`), Attribut (`self._tx_ctrl`),
-  alle Referenzen. Kein Verhaltensänderung. Neue Methode: `set_mspeed_ms(ms)`
-  für Modi ohne sinnvolle Baudrate (Morse, künftig AMTOR).
-- `_is_txctrl_mode(mode)` — neuer Helper in `main_window.py`, einzige Quelle
-  der Mode-Liste. Aktuell: `("Baudot RTTY", "ASCII RTTY", "CW / Morse")`.
-  AMTOR wird in Paket 2b ergänzt.
+**Paket 2a — CW/Morse (erledigt, 437e8a1):**
+`morse_screen.py`: `tx_input` auf `TxInputWidget` umgestellt.
+`[^D]` EOT → RC (wie Baudot). ACK-getaktet, `_MORSE_TXCTRL_MS = 50`.
+Hardware-Tests T69–T72 ausstehend.
 
-**CW/Morse (Paket 2a, committet 437e8a1) — ERLEDIGT:**
-- `morse_screen.py`: `tx_input` von `QTextEdit` auf `TxInputWidget` umgestellt
-  (liefert `char_typed`, `[^D]`-Erkennung, `colour_at`, Edit-Schutz).
-- EOT bei Morse: `[^D]` → `eot_reached` → RC (RECEIVE). Wie Baudot.
-- Takt: ACK-getaktet (TNC steuert WPM), Software-Timer nur als
-  Überlaufschutz (`_MORSE_TXCTRL_MS = 50`, in `main_window.py`).
-- Bonus: Morse-Macros funktionierten vorher nicht (latenter Crash, weil
-  Macro-Pfad `char_typed` emittiert, das Plain-QTextEdit nicht hatte).
-  Durch Widget-Tausch automatisch mitgeheilt.
-- Hardware-Test: steht noch aus (manueller Schritt beim User).
+**Paket 2b — AMTOR (erledigt, 8087564):**
+`amtor_screen.py`: `tx_input` auf `TxInputWidget` umgestellt.
+TX-Aktivierung: KEIN btn_send / XM-Frame. CONNECTED-Link-Message →
+`on_send_start()` in `_make_link_handler()`. ARQ-EOT → PTOVER `\x1A`
+(Ctrl-Z, eingebettet im Datenstrom, wartet auf Puffer-leer). FEC-EOT
+→ `on_send_stop()`. ARQ/FEC-Unterscheidung via `btn_fec.isChecked()`,
+NIE via `mode.name`. `_AMTOR_TXCTRL_MS = 50`.
+Hardware-Tests T73–T79 ausstehend (T73 zuerst!).
+CRITICAL CAVEAT: `_make_link_handler()` triggert auf "connected" im
+Link-Message-Text. Falls der TNC anderen Text schickt → Handler anpassen.
 
-**AMTOR (Paket 2b) — OFFEN:**
-EOT-Verhalten für AMTOR ist ANDERS als für Baudot/ASCII/Morse:
-- AMTOR-ARQ: `[^D]` → `OV` (OVER/Strg-Z, reguläre höfliche Übergabe,
-  wartet auf leeren Puffer, Rollen-Tausch ISS↔IRS, Funkverbindung bleibt).
-  NICHT RC (würde Verbindung abbrechen) und NICHT ACHG (das ist Break-In).
-- AMTOR-FEC: `[^D]` → RC (kein Verbindungs-Konzept, wie Baudot).
-- Umsetzung: `_on_baudot_eot()` muss mode-spezifisch verzweigen (ARQ→OV,
-  FEC→RC). AMTOR muss in `_is_txctrl_mode()` ergänzt werden.
-- AMTOR sendet in 3-Zeichen-Blöcken (ARQ-Protokoll) — Controller-Takt
-  analog Morse: ACK-getaktet + `set_mspeed_ms()`.
-
-**Packet — KEIN CTRL+D (Designentscheidung, final):**
-- Packet paketiert erst beim ETB-Zeichen, hat kein Zeichen-für-Zeichen-ACK.
-  Das `[^D]`-EOT-Konzept passt nicht zur AX.25-Semantik.
-- PACKET braucht STATTDESSEN einen "Stop Sending"-Button (Paket 3, s.u.).
-
-**Paket 3 — Stop Sending (alle sendefähigen Screens, OFFEN):**
-Neuer Button auf allen TX-fähigen Screens (AMTOR, Morse, HF/VHF Packet,
-Baudot/ASCII). Mode-spezifische TNC-Aktion:
-- AMTOR: `AM` (Stby + TNC-Sendepuffer löschen). Mnemonic: AM.
-           Nicht `R` (löscht Puffer NICHT).
-- Baudot/ASCII/Morse: RC + lokalen TxController-Puffer flushen
-  (`on_send_stop()` + `clear()`).
-- Packet: TBD (kein EOT-Konzept, aber Abbruch muss möglich sein).
-Beschriftung des Buttons: "Stop TX" oder "Abort TX" (noch offen).
+**Paket 3 — Stop Sending (offen):**
+Neuer "Stop TX"-Button auf allen TX-fähigen Screens.
+AMTOR → `AM` (Mnemonic, Stby + TNC-Puffer löschen; NICHT `R`).
+Baudot/ASCII/Morse → RC + `on_send_stop()` + `clear()`.
+Packet → TBD (kein EOT-Konzept).
 
 ### Help system — ausdifferenzieren
 - `help_baudot.md` exists as one large file
@@ -120,7 +99,7 @@ Beschriftung des Buttons: "Stop TX" oder "Abort TX" (noch offen).
 - `TooltipManager` — central tooltip registration for buttons
 
 ### MSPEED from TNC config
-- Auto-set `TxController.set_mspeed()` from `PK232.INI` MSPEED
+- Auto-set `TxController.set_mspeed()` / `set_mspeed_ms()` from `PK232.INI` MSPEED
   parameter on Host Mode activation (currently hardcoded to 50 Baud default)
 - Config dialog already has MSPEED field for Morse — extend to Baudot/ASCII
 
@@ -144,8 +123,9 @@ Beschriftung des Buttons: "Stop TX" oder "Abort TX" (noch offen).
 - Same TxController integration as Baudot
 - Currently wired but untested
 
-### AMTOR ARQ TX integration
-- Rate-limited TX not needed (AMTOR is ARQ — TNC manages retransmission)
+### AMTOR ARQ TX integration — ✅ Erledigt (Paket 2b, 8087564)
+AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
+(kein btn_send, kein XM-Frame — TNC managed 100 Bd ARQ timing).
 
 ### PACTOR I TX integration
 - Similar to AMTOR
@@ -164,6 +144,7 @@ Beschriftung des Buttons: "Stop TX" oder "Abort TX" (noch offen).
 |------|-------|
 | TxController — Paket 1 (Umbenennung) | `BaudotTxController` → `TxController`, Datei `tx_controller.py`, `set_mspeed_ms()` ergänzt. commit cc2adff |
 | TxController — Paket 2a (Morse) | Morse auf TxController gehoben, `[^D]` EOT → RC, ACK-getaktet. commit 437e8a1 |
+| TxController — Paket 2b (AMTOR) | `amtor_screen.py`: TxInputWidget, CONNECTED→start, PTOVER ARQ-EOT. commit 8087564 |
 | Clear TX / Clear RX buttons — all opmode screens | Done. TX-capable screens (AMTOR, CW/Morse, HF Packet, VHF Packet) emit `clear_tx_req` / `clear_rx_req` (signal pattern, wired by `MainWindow`); receive-only Signal/SIAM + NAVTEX got a local `_on_clear_rx()` slot; FAX got a local `_on_clear_image()` slot ("Clear Image"). |
 | FAX closed-loop test tooling (`tools/`) | `fax_wav_generator.py` (WEFAX test-WAV generator: weather/pattern/text) + `fax_decoder_test.py` standalone decoder. Generator GPL v2, decoder GPL v3 (test-only, never shipped). |
 | `fax_decoder_test.py` — fractional line length | Fixes accumulating line drift / slant (parallelogram) for non-integer samples-per-line. |

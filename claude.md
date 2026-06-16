@@ -72,9 +72,14 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
 - Packet: Remaining toggle/button tests (T43–T51)
 - PACTOR/AMTOR: identity, focus tests (T52–T58)
 - APRS: buffer cleared on mode switch (T65)
-- CTRL+D EOT: Paket 2b (AMTOR) + Paket 3 (Stop Sending) offen — siehe
-  `Backlog.md` für vollständige Architektur-Entscheidungen.
-- Hardware-Test Paket 2a (Morse): steht aus.
+- CTRL+D EOT Paket 2b (AMTOR): implementiert (8087564) — Hardware-Test
+  T73–T79 ausstehend (T73 CONNECTED-Text zuerst, braucht zweite Station).
+- CTRL+D EOT Paket 3 (Stop Sending): offen — siehe Backlog.md.
+- Hardware-Test Paket 2a (Morse) T69–T72: ausstehend.
+- AMTOR TX-Aktivierung: KEIN btn_send / XM-Frame. TxController startet
+  wenn `_make_link_handler()` "connected" im Link-Message-Text erkennt
+  → `on_send_start()`. CRITICAL: T73 verifiziert, dass der TNC tatsächlich
+  diesen Text schickt — falls nicht, `_make_link_handler()` anpassen.
 
 ---
 
@@ -120,8 +125,8 @@ src/pk232py/
     screens/
       opmode_rtty_base.py   RttyBaseScreen, MacroStore, theme helpers
       tx_controller.py      TxController — pure ACK-driven TX state machine for
-                            character-ACK modes (Baudot, ASCII, Morse, soon
-                            AMTOR). Was baudot_tx_controller.py until Paket 1
+                            character-ACK modes (Baudot, ASCII, Morse, AMTOR ARQ/FEC).
+                            Was baudot_tx_controller.py until Paket 1
                             (cc2adff); no serial I/O, no widget refs.
       baudot_screen.py / ascii_screen.py / amtor_screen.py / morse_screen.py
       pactor_screen.py / navtex_screen.py / signal_screen.py / fax_screen.py
@@ -276,13 +281,18 @@ no serial I/O, no widget refs. Key learnings from the 2026-06-16 session:
 
 - `_is_txctrl_mode(mode)` in `main_window.py` is the **single source of truth**
   for which modes are driven by `TxController`. Currently
-  `("Baudot RTTY", "ASCII RTTY", "CW / Morse")`; AMTOR is added in Paket 2b.
+  `("Baudot RTTY", "ASCII RTTY", "CW / Morse", "AMTOR ARQ", "AMTOR FEC")`
+  (Paket 2b / commit 8087564 — AMTOR added 2026-06-16).
 - **Morse** is ACK-paced — the TNC controls WPM. The software timer is only an
   overflow safety net: `_MORSE_TXCTRL_MS = 50` in `main_window.py`, fed via
   `set_mspeed_ms()` (direct-ms interval for modes with no meaningful Baud rate).
 - **AMTOR EOT ≠ RC** (verified against the Technical Reference Manual):
-  AMTOR-ARQ `[^D]` → `OV` (OVER — polite turnaround, ISS↔IRS role swap, link
-  stays up); AMTOR-FEC `[^D]` → `RC` (no connection concept, like Baudot).
+  AMTOR-ARQ `[^D]` → PTOVER character `\x1A` (Ctrl-Z) sent into the now-empty
+  TX stream — polite ISS↔IRS turnaround, link stays up. NOT the `OV` host
+  command (fires immediately, does not wait for buffer drain — TRM p.179).
+  AMTOR-FEC `[^D]` → `on_send_stop()` (no connection concept, no TNC command).
+  ARQ vs FEC derived from `btn_fec.isChecked()` / `btn_selfec.isChecked()` —
+  NEVER from `mode.name` (ModeManager only ever produces "AMTOR ARQ").
 - **Packet uses NO TxController and NO `[^D]`.** AX.25 packetises at the ETB
   character and has no character-by-character ACK, so the EOT-marker concept
   does not fit. Packet needs a Stop-button instead of an EOT marker.
@@ -308,7 +318,7 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
 | `TX_STATE_MACHINE.md` | TX character flow, paste handling, backspace sentinel |
 | `Eventfilter_architecture.md` | Three-level event filter architecture |
 | `Backlog.md` | Prioritised open work items |
-| `Testplan.md` | Test cases T01–T72 with pass/fail status |
+| `Testplan.md` | Test cases T01–T79 with pass/fail status |
 | `pk232py_sources.txt` | Complete source code export (authoritative) |
 | `AEA-PK-232-TechnicalReferenceManual.pdf` | Hardware reference (Host Mode protocol) |
 | `PPWIN.HLP` | PCPackRatt help file (reference for UI feature parity) |

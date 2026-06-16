@@ -1,12 +1,11 @@
 # PK232PY -- TX/RX State Machine Reference
 
-**Scope:** all character-ACK opmode screens — Baudot RTTY, ASCII RTTY and
-CW/Morse (since Paket 2a / 437e8a1); AMTOR planned for Paket 2b.
+**Scope:** All character-ACK modes: Baudot RTTY, ASCII RTTY, CW/Morse,
+AMTOR ARQ/FEC. See §18 for AMTOR-specific behaviour.
 **Implementation:** `TxController` in `src/pk232py/ui/screens/tx_controller.py`
-(renamed from `BaudotTxController` / `baudot_tx_controller.py` in Paket 1,
-cc2adff — the controller is mode-agnostic: no serial I/O, no widget refs).
+(renamed from `BaudotTxController` / `baudot_tx_controller.py` in Paket 1, cc2adff)
 **TxInputWidget** in `src/pk232py/ui/screens/opmode_rtty_base.py`
-**Last updated:** 2026-06-16 (v16)
+**Last updated:** 2026-06-16 (v16 — Paket 2a Morse, Paket 2b AMTOR)
 
 ---
 
@@ -34,6 +33,10 @@ cc2adff — the controller is mode-agnostic: no serial I/O, no widget refs).
 | `S3` | EOT marker `[^D]` reached | `eot_reached` signal -- automatic switch to RECEIVE | `S2` |
 | Any | Host Mode exited | Disable buttons, reset controller | `S0` |
 | Any | Serial disconnected | Disable buttons, reset controller | `S0` |
+
+> **AMTOR exception:** AMTOR has no XM frame and no btn_send.
+> `on_send_start()` is called from `_make_link_handler()` when the
+> ARQ link reaches CONNECTED state. See §18.
 
 ---
 
@@ -105,6 +108,10 @@ A QTimer sends one character per `_mspeed_ms` interval.
 `set_mspeed(baud)` must be called in TWO places:
 1. `_wire_screen_buttons()` -- on mode activation, from config
 2. `_on_screen_rbaud_changed()` -- when user changes RBAUD dropdown
+
+> For modes without a meaningful Baud rate (Morse, AMTOR), use
+> `set_mspeed_ms(ms)` instead (e.g. `_MORSE_TXCTRL_MS = 50`,
+> `_AMTOR_TXCTRL_MS = 50` in `main_window.py`).
 
 ---
 
@@ -337,8 +344,8 @@ frames must write synchronously to the port, not via a queue.
 | Baudot RTTY | Visual feedback only | `RC` (to drop PTT) |
 | ASCII RTTY | Visual feedback only | `RC` (to drop PTT) |
 | CW / Morse | Visual feedback only | `RC` (to drop PTT) |
-| AMTOR ARQ | Not used -- use ALIST button | ALIST |
-| AMTOR FEC | Not used -- use FEC button | FEC |
+| AMTOR ARQ | Not used (no btn_receive). EOT [^D] → PTOVER \x1A (Ctrl-Z). See §18. | PTOVER char |
+| AMTOR FEC | Not used (no btn_receive). EOT [^D] → on_send_stop(). See §18. | (none) |
 | NAVTEX | Automatic -- no button needed | None |
 | FAX | Automatic -- no button needed | None |
 
@@ -355,6 +362,7 @@ frames must write synchronously to the port, not via a queue.
 | DATA_ACK from TNC | | `01 5F 58 58 00 17` |
 | Exit Host Mode | `HO` (HOST OFF) | `01 4F 48 4F 4E 17` |
 | Monitor/RX frame | | `01 3F xx 17` |
+| ARQ turnaround (PTOVER char) | embedded in data stream | `01 1A 17` (SOH \x1A ETB) |
 
 ---
 
@@ -368,13 +376,13 @@ AMTOR in particular must NOT use `RC` (which would drop the link).
 | Baudot RTTY | RC | `RC` | Since v10, proven |
 | ASCII RTTY | RC | `RC` | Like Baudot |
 | CW/Morse | RC | `RC` | Paket 2a, TxController ACK-paced |
-| AMTOR-ARQ | OVER | `OV` | Polite turnaround, ISS↔IRS role swap, link stays up. NOT ACHG (= Break-In)! |
-| AMTOR-FEC | RC | `RC` | No connection concept |
+| AMTOR-ARQ | PTOVER char | `\x1A` (Ctrl-Z) | Embedded in TX stream; polite ISS↔IRS turnaround, link stays up. NOT the `OV` host command (fires immediately, TRM p.179). See §18. |
+| AMTOR-FEC | stop controller | `on_send_stop()` | No connection concept; no TNC command. See §18. |
 | Packet | — | — | No EOT; packetises at ETB; needs a Stop button (`AM`) |
 
-Implementation note: `_on_baudot_eot()` must branch by mode for AMTOR
-(ARQ → `OV`, FEC → `RC`), and AMTOR must be added to `_is_txctrl_mode()`
-(Paket 2b, open).
+Implementation note (Paket 2b, 8087564): `_on_baudot_eot()` branches for AMTOR
+(ARQ → PTOVER `\x1A`, FEC → `on_send_stop()`), with ARQ vs FEC read from
+`btn_fec`/`btn_selfec` (never `mode.name`). AMTOR is in `_is_txctrl_mode()`.
 
 ---
 
@@ -384,9 +392,50 @@ Implementation note: `_on_baudot_eot()` must branch by mode for AMTOR
 |------|------------------|-----------|
 | Baudot/ASCII | QTimer → mspeed from config (Baud) | `set_mspeed(baud)` |
 | CW/Morse | ACK-paced; timer = overflow safety net only | `set_mspeed_ms(50)` = `_MORSE_TXCTRL_MS` |
-| AMTOR (Paket 2b) | ACK-paced; 3-character ARQ blocks | `set_mspeed_ms(TBD)` |
+| AMTOR ARQ/FEC | ACK-paced; 3-character ARQ blocks | `set_mspeed_ms(50)` = `_AMTOR_TXCTRL_MS` |
 
 `set_mspeed_ms(ms)` (added in Paket 1) takes a direct ms interval for modes
 that have no meaningful Baud rate; `set_mspeed(baud)` only maps Baud → ms.
+
+---
+
+## 18. AMTOR-Specific TX Behaviour (Paket 2b, 8087564)
+
+AMTOR differs from Baudot/Morse in three fundamental ways:
+
+### No PTT toggle — link state drives TX
+AMTOR has no `btn_send` and no XM frame. The TxController starts when
+the ARQ link reaches CONNECTED state:
+```python
+# In _make_link_handler() — fires when TNC sends link message with "connected"
+if "connected" in msg.lower() and mode.name == "AMTOR ARQ":
+    self._tx_ctrl.on_send_start()
+```
+**CRITICAL:** This depends on the TNC sending a link message containing
+"connected". Verify with T73 (hardware test). If the TNC sends a different
+text, update the `"connected" in m` check in `_make_link_handler()`.
+
+On DISCONNECT: `on_send_stop()` is called from the same handler.
+
+### EOT action depends on ARQ vs FEC sub-mode
+ARQ and FEC are screen sub-states (btn_fec / btn_selfec), NOT separate
+ModeManager modes. ModeManager always produces `"AMTOR ARQ"`.
+
+| Sub-mode | [^D] action | Reasoning |
+|----------|------------|-----------|
+| ARQ (btn_fec and btn_selfec NOT checked) | Send PTOVER char `\x1A` | Polite ISS↔IRS turnaround; link stays up. Waits for buffer drain (TRM p.179). |
+| FEC (btn_fec or btn_selfec IS checked) | `on_send_stop()` | No ARQ connection — TNC returns to standby naturally. |
+
+**Do NOT use the OV host command** — it fires immediately without
+waiting for the buffer (TRM p.179: "Die Umschaltung erfolgt so schnell
+wie möglich"). PTOVER char embedded in the (already empty) data stream
+is the correct mechanism.
+
+### Timer: ACK-paced, not Baud-rate-paced
+```python
+self._tx_ctrl.set_mspeed_ms(_AMTOR_TXCTRL_MS)  # = 50 ms
+```
+The TNC controls 100 Bd ARQ timing. The timer is only a buffer-overflow
+safety net. If TX flow stutters on hardware, reduce `_AMTOR_TXCTRL_MS`.
 
 *OE3GAS | PK232PY Project | AEA PK-232MBX Host Mode*

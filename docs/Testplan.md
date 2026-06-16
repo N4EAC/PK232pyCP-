@@ -1,5 +1,5 @@
 # PK232PY — Test Plan
-**Updated: 2026-06-16 (v16) — Paket 2a/2b TxController (Morse + AMTOR), T69–T79**
+**Updated: 2026-06-16 (v16) — Paket 2a/2b TxController (Morse + AMTOR), T69–T79; FAX closed-loop T66–T68; clear buttons**
 **Previous stand: 2026-06-16 (v16) — CW/Morse TxController tests T69–T72 (Paket 2a)**
 
 ---
