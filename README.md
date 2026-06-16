@@ -1,7 +1,6 @@
 # PK232PY
 
 [![CI](https://github.com/OE3GAS/pk232py/actions/workflows/ci.yml/badge.svg)](https://github.com/OE3GAS/pk232py/actions)
-[![PyPI version](https://badge.fury.io/py/pk232py.svg)](https://badge.fury.io/py/pk232py)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](https://github.com/OE3GAS/pk232py)
@@ -18,7 +17,7 @@ It also offers a build in signal analysis option which works well on RTTY signal
 With this project I hope to support a revival of the PK232 (MBX) on the bands.
 
 
-> **Status:** Pre-Alpha — active development. Not yet suitable for production use.
+> **Status:** v0.1-beta — active development. Not yet suitable for production use.
 
 ---
 
@@ -33,10 +32,8 @@ With this project I hope to support a revival of the PK232 (MBX) on the bands.
   - CW / Morse
   - NAVTEX receive
   - TDM, FAX receive, Signal Analysis (SIAM)
-- MailDrop management
-- QSO logging
 - Macro system
-- Modern PyQt6 GUI with MDI windowing
+- Modern PyQt6 GUI
 - Cross-platform: **Windows 10/11**, **Linux**, **macOS**
 
 ## Supported Hardware
@@ -54,20 +51,13 @@ With this project I hope to support a revival of the PK232 (MBX) on the bands.
 
 ## Installation
 
-### From PyPI (recommended)
-
-```bash
-pip install pk232py
-pk232py
-```
-
 ### From source
 
 ```bash
 git clone https://github.com/OE3GAS/pk232py.git
 cd pk232py
 pip install -e ".[dev]"
-pk232py
+python -m pk232py
 ```
 
 ### Requirements
@@ -83,7 +73,7 @@ pk232py
 ## Quick Start
 
 1. Connect your PK-232MBX to a serial port (or USB-serial adapter)
-2. Launch PK232PY: `pk232py`
+2. Launch PK232PY: `python -m pk232py`
 3. Go to **Configure → TNC Configuration**
 4. Select TNC Model: `PK232MBX`, set your COM port and baud rate
 5. Click **OK** — the program will initialise the TNC and enter Host Mode
@@ -130,14 +120,11 @@ pk232py/
 
 ## Roadmap
 
-| Version | Milestone |
-|---------|-----------|
-| v0.1 | Serial connection, Host Mode protocol, basic terminal window |
-| v0.2 | HF/VHF Packet, parameter dialogs, monitor window |
-| v0.3 | PACTOR I, AMTOR, Baudot/ASCII RTTY |
-| v0.5 | MailDrop, macros, QSO log, full menu structure |
-| v0.8 | CW/Morse, NAVTEX, Windows + Linux installer |
-| v1.0 | TDM, FAX, signal analysis, full documentation |
+| Version | Milestone | Status |
+|---------|-----------|--------|
+| v0.1-beta | Host Mode protocol stack; all 10 operating-mode screens (HF/VHF Packet, PACTOR I, AMTOR, Baudot/ASCII RTTY, CW/Morse, NAVTEX, FAX, Signal Analysis); macro system | ← **current** |
+| post-beta | Packet Connect/Disconnect & MHEARD, parameter integration, theme persistence | planned |
+| v1.0 | MailDrop, QSO log, full documentation, stable release | planned |
 
 ---
 
