@@ -1,6 +1,6 @@
 # PK232PY — Test Plan
-**Updated: 2026-06-16 (v16) — CW/Morse TxController tests T69–T72 (Paket 2a)**
-**Previous stand: 2026-06-15 (v16) — FAX closed-loop tests T66–T68 formalised; clear buttons**
+**Updated: 2026-06-16 (v16) — Paket 2a/2b TxController (Morse + AMTOR), T69–T79**
+**Previous stand: 2026-06-16 (v16) — CW/Morse TxController tests T69–T72 (Paket 2a)**
 
 ---
 
@@ -29,6 +29,7 @@
 | **v15** | `main_window.py` | `_packet_raw_frames` buffer, `decode_html()` path, dual-buffer redraw |
 | **v16** | `tx_controller.py` *(renamed)* | `BaudotTxController` → `TxController`; `set_mspeed_ms()` added (cc2adff) |
 | **v16** | `morse_screen.py`, `main_window.py` | Morse on TxController: `TxInputWidget`, `[^D]` EOT → RC, ACK-paced; `_is_txctrl_mode()` helper, `_MORSE_TXCTRL_MS=50` (437e8a1) |
+| **v16** | `tx_controller.py`, `morse_screen.py`, `amtor_screen.py`, `main_window.py` | TxController: Morse (Paket 2a) + AMTOR (Paket 2b); CONNECTED triggers `on_send_start()`; PTOVER for ARQ EOT (8087564) |
 
 ---
 
@@ -107,57 +108,206 @@
 ## Test Block 2b — CW/Morse TxController (Paket 2a / 437e8a1)
 
 ### T69 — Morse SEND: ACK-Färbung + genau 1 [TX] pro Zeichen
-1. Host Mode aktiv → CW/Morse → SEND
-2. Einige Zeichen tippen
+1. Host Mode aktiv → ComboBox → **CW / Morse** → **SEND**
+2. Einige Buchstaben tippen (z.B. "CQ CQ")
 
 **Expected result:**
-- Zeichen erscheinen nach DATA_ACK grün/gefärbt (wie Baudot)
-- Im Monitor: genau EIN `[TX]`-Eintrag pro Tastendruck (kein Doppelsenden)
-- Sendefluss flüssig (nicht ruckelnd — sonst `_MORSE_TXCTRL_MS` senken)
+- Jedes Zeichen erscheint nach DATA_ACK grün/ACK-gefärbt im TX-Fenster
+  (identisches Verhalten wie Baudot RTTY)
+- Im Monitor: genau EIN `[TX]`-Eintrag pro Tastendruck — kein Doppelsenden
+- Sendefluss flüssig; stockt er → `_MORSE_TXCTRL_MS` in `main_window.py`
+  senken (derzeit 50 ms)
+
+**Diagnose bei Fehler:**
+- Doppelsenden → `char_ready`-Guard in `_wire_mode_callbacks` prüfen
+- Zeichen nicht gefärbt → `char_typed`-Verbindung zu `TxController` prüfen
 
 **Status:** ⬜ OPEN (Hardware-Test ausstehend)
 
 ---
 
 ### T70 — Morse CTRL+D EOT: wartet auf letztes Zeichen
-1. SEND → Text "599" tippen → CTRL+D ([^D] erscheint orange)
-2. Nichts weiter tun
+1. SEND aktiv → Text "599" tippen → **CTRL+D** drücken
+   ([^D] erscheint orange im TX-Fenster)
+2. Nichts weiter tun — warten
 
 **Expected result:**
-- TNC sendet "599" vollständig
-- ERST nach DATA_ACK des letzten Zeichens vor [^D] schaltet App auf
-  RECEIVE (RC)
-- NICHT vorher (kein vorzeitiges Umschalten)
+- TNC sendet "599" vollständig aus
+- ERST nach DATA_ACK des letzten Zeichens schaltet App auf RECEIVE (RC)
+- Kein vorzeitiges Umschalten mittendrin
 
-**Diagnose:** Schaltet zu früh → `_ack_idx`-zu-`_eot_positions`-Zuordnung
-prüfen in `tx_controller.py`
+**Diagnose bei Fehler:**
+- Schaltet zu früh → `_ack_idx`-zu-`_eot_positions`-Zuordnung in
+  `tx_controller.py` prüfen
 
 **Status:** ⬜ OPEN (Hardware-Test ausstehend)
 
 ---
 
 ### T71 — Morse Macro mit eingebettetem [^D]
-1. Macro mit Text + [^D] am Ende anlegen
-2. SEND → Macro abspielen
+1. Macro anlegen: Text + [^D] am Ende (z.B. "73 DE OE3GAS [^D]")
+2. SEND → Macro-Button klicken
 
 **Expected result:**
-- Macro vollständig gesendet, dann RECEIVE
-- Umschaltung erst nach letztem bestätigten Zeichen (nicht mittendrin)
-- Kein Crash beim Macro-Abspielen (war vorher latenter Bug durch
-  fehlendes `char_typed` im alten QTextEdit)
+- Macro vollständig gesendet, danach RECEIVE
+- Umschaltung erst nach letztem bestätigtem Zeichen — nicht mittendrin
+- Kein Crash (war vorher latenter Bug: Macro-Pfad emittiert `char_typed`,
+  das alte Plain-QTextEdit hatte dieses Signal nicht)
 
 **Status:** ⬜ OPEN (Hardware-Test ausstehend)
 
 ---
 
 ### T72 — Morse WPM-Tempo: Software interferiert nicht
-1. MSPEED-Spinbox auf verschiedene WPM-Werte setzen
-2. Text senden und beobachten
+1. MSPEED-Spinbox auf verschiedene WPM-Werte setzen (z.B. 10, 20, 40 WPM)
+2. Text senden, Tempo beobachten
 
 **Expected result:**
-- Sendetempo ausschließlich vom TNC (MSPEED) gesteuert
-- Software-Timer (`_MORSE_TXCTRL_MS = 50`) bremst nicht und läuft nicht vor
+- Sendetempo ausschließlich vom TNC (MSPEED-Einstellung) gesteuert
+- Software-Timer (`_MORSE_TXCTRL_MS = 50`) bremst den Fluss nicht und
+  läuft dem TNC nicht vor
 - Kein BUFFER_FULL-Dialog bei normalem Text
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+
+---
+
+## Test Block 2c — AMTOR TxController (Paket 2b / 8087564)
+
+### T73 — AMTOR Link-Message-Text: CONNECTED erkennbar
+**KRITISCH — muss als erster AMTOR-Test durchgeführt werden.**
+Paket 2b aktiviert den TxController beim Empfang des Link-Message-Texts
+"connected". Dieser Test verifiziert, dass der TNC tatsächlich diesen
+Text schickt.
+
+1. Host Mode aktiv → ComboBox → **AMTOR**
+2. Monitor-Fenster öffnen (alle Frames sichtbar)
+3. ARQ-Call zu einer zweiten AMTOR-Station aufbauen
+   (btn_arq → Ziel-SELCAL eingeben → Verbindung abwarten)
+4. Monitor beobachten während des Verbindungsaufbaus
+
+**Expected result:**
+- Im Monitor erscheint ein Link-Message-Frame mit dem Text
+  "CONNECTED" (Groß-/Kleinschreibung egal, da `msg.lower()` verwendet)
+- Unmittelbar danach im Monitor:
+  `[AMTOR] CONNECTED → TxController started`
+- Status-Pill auf AmtorScreen zeigt **● CONNECTED** (grün)
+
+**Diagnose bei Fehler — CONNECTED-Text fehlt oder anders:**
+- Monitor zeigt anderen Text (z.B. "LINK ESTABLISHED", "ARQ LINK UP"
+  oder ähnliches) → `_make_link_handler()` in `main_window.py` anpassen:
+  den `"connected" in m`-Check um den tatsächlichen TNC-Text erweitern.
+  Exakten Text aus Monitor-Log entnehmen und in CC melden.
+- `[AMTOR] CONNECTED → TxController started` fehlt →
+  `on_link_message`-Route in `_wire_mode_callbacks` prüfen
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend, zweite AMTOR-Station
+benötigt)
+
+---
+
+### T74 — AMTOR ARQ TX: ACK-Färbung + 1 [TX] pro Zeichen
+*Voraussetzung: T73 bestanden (CONNECTED erkannt, TxController gestartet)*
+
+1. AMTOR, ARQ-Verbindung steht (● CONNECTED) → Zeichen tippen
+
+**Expected result:**
+- Jedes Zeichen erscheint nach DATA_ACK grün/ACK-gefärbt im TX-Fenster
+- Im Monitor: genau EIN `[TX]`-Eintrag pro Zeichen
+- Sendefluss flüssig (3-Zeichen-ARQ-Blöcke, TNC steuert 100-Bd-Timing)
+
+**Diagnose bei Fehler:**
+- Zeichen werden nicht gesendet → TxController nicht gestartet (T73-Diagnose)
+- Doppelsenden → `char_ready`-Guard in `_wire_mode_callbacks` prüfen
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend, zweite AMTOR-Station
+benötigt)
+
+---
+
+### T75 — AMTOR ARQ CTRL+D EOT: PTOVER-Rollentausch
+*Voraussetzung: T74 bestanden*
+
+1. ARQ-Verbindung steht → Text "599 DE OE3GAS" tippen → **CTRL+D**
+2. Warten bis alle Zeichen gesendet
+
+**Expected result:**
+- Nach DATA_ACK des letzten Zeichens erscheint im Monitor:
+  `[AMTOR] EOT — PTOVER (\x1A) sent, ARQ turnaround`
+- ARQ-Verbindung bleibt aktiv (kein DISCONNECT)
+- ISS↔IRS-Rollentausch: Gegenstation wird zur sendenden Station
+- NICHT: sofortiger Link-Abbruch oder RC-Befehl
+
+**Diagnose bei Fehler:**
+- Link bricht ab → fälschlicherweise OV-Befehl statt \x1A gesendet
+- Kein Rollentausch → PTOVER-Zeichen nicht als $1A vom TNC erkannt
+  (Betriebsart prüfen: nur in AMTOR-ARQ, nicht in FEC)
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend, zweite AMTOR-Station
+benötigt)
+
+---
+
+### T76 — AMTOR ARQ CTRL+D in Macro
+*Voraussetzung: T75 bestanden*
+
+1. Macro mit eingebettetem [^D] anlegen (z.B. "599 [^D]")
+2. ARQ-Verbindung steht → Macro abspielen
+
+**Expected result:**
+- Macro vollständig gesendet, dann PTOVER-Rollentausch
+- Kein vorzeitiges Umschalten — erst nach letztem ACK
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend, zweite AMTOR-Station
+benötigt)
+
+---
+
+### T77 — AMTOR FEC TX: Zeichen fließen, kein PTOVER
+*FEC braucht keine zweite Station — Rundspruch ohne ARQ-Verbindung.*
+
+1. ComboBox → AMTOR → **btn_fec** drücken (FEC-Modus aktivieren)
+2. Text senden
+3. CTRL+D drücken
+
+**Expected result:**
+- Zeichen werden gesendet und ACK-gefärbt
+- Bei [^D]: `on_send_stop()` wird aufgerufen (kein PTOVER \x1A)
+- Monitor zeigt: `[AMTOR] EOT — FEC TX done, controller stopped`
+- KEIN Link-Abbruch (es gab keine ARQ-Verbindung)
+
+**Diagnose bei Fehler:**
+- PTOVER wird in FEC gesendet → btn_fec.isChecked()-Abfrage in
+  `_on_baudot_eot()` prüfen
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+
+---
+
+### T78 — AMTOR DISCONNECT: TxController gestoppt
+*Voraussetzung: ARQ-Verbindung aktiv*
+
+1. ARQ-Verbindung steht, Text im TX-Fenster → Verbindung trennen
+   (btn_stby oder Gegenstation bricht ab)
+
+**Expected result:**
+- Monitor zeigt: `[AMTOR] DISCONNECTED → TxController stopped`
+- Status-Pill → **● STBY**
+- Kein weiterer TX-Versuch nach Disconnect
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend, zweite AMTOR-Station
+benötigt für Gegenstation-Abbruch; STBY-Button allein testbar)
+
+---
+
+### T79 — AMTOR TxController: kein Doppelsenden nach Mode-Switch
+1. Baudot RTTY → AMTOR → zurück zu Baudot → wieder AMTOR
+   (mehrfacher Mode-Switch)
+2. Nach jedem Wechsel: Text senden
+
+**Expected result:**
+- Pro Zeichen immer genau EIN [TX] im Monitor
+- Keine gestapelten Signal-Verbindungen durch wiederholtes _wire_mode_callbacks
 
 **Status:** ⬜ OPEN (Hardware-Test ausstehend)
 
@@ -528,7 +678,8 @@ must not be committed; it is only a local fallback.
 | Low | Multi-cycle RTTY colour | T18 |
 | Low | Macro full integration | T19–T22 |
 | Low | Help Viewer | T27–T28 |
-| Medium | Morse TxController (Paket 2a) — hardware test pending | T69–T72 |
+| Medium | CW/Morse TxController (Paket 2a) | T69–T72 |
+| Medium | AMTOR TxController (Paket 2b) — T73 zuerst! | T73–T79 |
 
 ---
 
