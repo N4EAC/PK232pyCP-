@@ -1,6 +1,6 @@
 # PK232PY — Development Backlog
 
-**Last updated:** 2026-06-14 (v16)
+**Last updated:** 2026-06-16 (v16)
 **Current version:** v0.1 (development)
 
 ---
@@ -52,14 +52,55 @@ T33–T39 require a second AX.25 station.*
   file (e.g. `tools/Wetterkarte.jpg`), so it falls back to
   `wetterkarte_decoded.png`. Extend the candidate list.
 
-### CTRL+D (EOT) in weiteren Opmodes
+### TxController — CTRL+D EOT + Stop Sending (Paket 2b + Paket 3 offen)
 
-CTRL+D als End-of-Transmission Marker ist in Baudot RTTY vollständig
-implementiert (BaudotTxController). Die gleiche Funktionalität soll in
-folgenden Modes ergänzt werden:
+**Architektur-Entscheidungen (Session 2026-06-16, verifiziert gegen
+Technical Reference Manual und Bedienungsanleitung):**
 
-- **AMTOR** — ARQ: EOT sendet `\x04`, TNC wechselt zurück zu STANDBY
-- **CW/Morse** — EOT sendet `\x04` oder `AR` (je nach TNC-Konfiguration)
+- `BaudotTxController` umbenannt zu `TxController` (Paket 1, committet
+  cc2adff). Klasse, Datei (`tx_controller.py`), Attribut (`self._tx_ctrl`),
+  alle Referenzen. Kein Verhaltensänderung. Neue Methode: `set_mspeed_ms(ms)`
+  für Modi ohne sinnvolle Baudrate (Morse, künftig AMTOR).
+- `_is_txctrl_mode(mode)` — neuer Helper in `main_window.py`, einzige Quelle
+  der Mode-Liste. Aktuell: `("Baudot RTTY", "ASCII RTTY", "CW / Morse")`.
+  AMTOR wird in Paket 2b ergänzt.
+
+**CW/Morse (Paket 2a, committet 437e8a1) — ERLEDIGT:**
+- `morse_screen.py`: `tx_input` von `QTextEdit` auf `TxInputWidget` umgestellt
+  (liefert `char_typed`, `[^D]`-Erkennung, `colour_at`, Edit-Schutz).
+- EOT bei Morse: `[^D]` → `eot_reached` → RC (RECEIVE). Wie Baudot.
+- Takt: ACK-getaktet (TNC steuert WPM), Software-Timer nur als
+  Überlaufschutz (`_MORSE_TXCTRL_MS = 50`, in `main_window.py`).
+- Bonus: Morse-Macros funktionierten vorher nicht (latenter Crash, weil
+  Macro-Pfad `char_typed` emittiert, das Plain-QTextEdit nicht hatte).
+  Durch Widget-Tausch automatisch mitgeheilt.
+- Hardware-Test: steht noch aus (manueller Schritt beim User).
+
+**AMTOR (Paket 2b) — OFFEN:**
+EOT-Verhalten für AMTOR ist ANDERS als für Baudot/ASCII/Morse:
+- AMTOR-ARQ: `[^D]` → `OV` (OVER/Strg-Z, reguläre höfliche Übergabe,
+  wartet auf leeren Puffer, Rollen-Tausch ISS↔IRS, Funkverbindung bleibt).
+  NICHT RC (würde Verbindung abbrechen) und NICHT ACHG (das ist Break-In).
+- AMTOR-FEC: `[^D]` → RC (kein Verbindungs-Konzept, wie Baudot).
+- Umsetzung: `_on_baudot_eot()` muss mode-spezifisch verzweigen (ARQ→OV,
+  FEC→RC). AMTOR muss in `_is_txctrl_mode()` ergänzt werden.
+- AMTOR sendet in 3-Zeichen-Blöcken (ARQ-Protokoll) — Controller-Takt
+  analog Morse: ACK-getaktet + `set_mspeed_ms()`.
+
+**Packet — KEIN CTRL+D (Designentscheidung, final):**
+- Packet paketiert erst beim ETB-Zeichen, hat kein Zeichen-für-Zeichen-ACK.
+  Das `[^D]`-EOT-Konzept passt nicht zur AX.25-Semantik.
+- PACKET braucht STATTDESSEN einen "Stop Sending"-Button (Paket 3, s.u.).
+
+**Paket 3 — Stop Sending (alle sendefähigen Screens, OFFEN):**
+Neuer Button auf allen TX-fähigen Screens (AMTOR, Morse, HF/VHF Packet,
+Baudot/ASCII). Mode-spezifische TNC-Aktion:
+- AMTOR: `AM` (Stby + TNC-Sendepuffer löschen). Mnemonic: AM.
+           Nicht `R` (löscht Puffer NICHT).
+- Baudot/ASCII/Morse: RC + lokalen TxController-Puffer flushen
+  (`on_send_stop()` + `clear()`).
+- Packet: TBD (kein EOT-Konzept, aber Abbruch muss möglich sein).
+Beschriftung des Buttons: "Stop TX" oder "Abort TX" (noch offen).
 
 ### Help system — ausdifferenzieren
 - `help_baudot.md` exists as one large file
@@ -79,7 +120,7 @@ folgenden Modes ergänzt werden:
 - `TooltipManager` — central tooltip registration for buttons
 
 ### MSPEED from TNC config
-- Auto-set `BaudotTxController.set_mspeed()` from `PK232.INI` MSPEED
+- Auto-set `TxController.set_mspeed()` from `PK232.INI` MSPEED
   parameter on Host Mode activation (currently hardcoded to 50 Baud default)
 - Config dialog already has MSPEED field for Morse — extend to Baudot/ASCII
 
@@ -100,7 +141,7 @@ folgenden Modes ergänzt werden:
 ## Priority 3 — Future / v0.2+
 
 ### ASCII RTTY — full TX/RX integration
-- Same BaudotTxController integration as Baudot
+- Same TxController integration as Baudot
 - Currently wired but untested
 
 ### AMTOR ARQ TX integration
@@ -121,6 +162,8 @@ folgenden Modes ergänzt werden:
 
 | Item | Notes |
 |------|-------|
+| TxController — Paket 1 (Umbenennung) | `BaudotTxController` → `TxController`, Datei `tx_controller.py`, `set_mspeed_ms()` ergänzt. commit cc2adff |
+| TxController — Paket 2a (Morse) | Morse auf TxController gehoben, `[^D]` EOT → RC, ACK-getaktet. commit 437e8a1 |
 | Clear TX / Clear RX buttons — all opmode screens | Done. TX-capable screens (AMTOR, CW/Morse, HF Packet, VHF Packet) emit `clear_tx_req` / `clear_rx_req` (signal pattern, wired by `MainWindow`); receive-only Signal/SIAM + NAVTEX got a local `_on_clear_rx()` slot; FAX got a local `_on_clear_image()` slot ("Clear Image"). |
 | FAX closed-loop test tooling (`tools/`) | `fax_wav_generator.py` (WEFAX test-WAV generator: weather/pattern/text) + `fax_decoder_test.py` standalone decoder. Generator GPL v2, decoder GPL v3 (test-only, never shipped). |
 | `fax_decoder_test.py` — fractional line length | Fixes accumulating line drift / slant (parallelogram) for non-integer samples-per-line. |
@@ -189,4 +232,4 @@ folgenden Modes ergänzt werden:
 
 ---
 
-*OE3GAS | PK232PY Project | 2026-06-14*
+*OE3GAS | PK232PY Project | 2026-06-16*

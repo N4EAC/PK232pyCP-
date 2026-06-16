@@ -1,6 +1,6 @@
 # PK232PY — Test Plan
-**Updated: 2026-06-15 (v16) — FAX closed-loop tests T66–T68 formalised; clear buttons**
-**Previous stand: 2026-06-14 (v16) — FAX closed-loop test tooling, clear buttons**
+**Updated: 2026-06-16 (v16) — CW/Morse TxController tests T69–T72 (Paket 2a)**
+**Previous stand: 2026-06-15 (v16) — FAX closed-loop tests T66–T68 formalised; clear buttons**
 
 ---
 
@@ -27,6 +27,8 @@
 | **v15** | `aprs_decoder.py` *(new)* | APRS decoder v3: Mic-E, Position, WX, Telemetry, HTML cards |
 | **v15** | `packet_screen.py` | `btn_aprs` toggle, `APRS_CAPABLE`, `_STYLE_APRS_ON/OFF` |
 | **v15** | `main_window.py` | `_packet_raw_frames` buffer, `decode_html()` path, dual-buffer redraw |
+| **v16** | `tx_controller.py` *(renamed)* | `BaudotTxController` → `TxController`; `set_mspeed_ms()` added (cc2adff) |
+| **v16** | `morse_screen.py`, `main_window.py` | Morse on TxController: `TxInputWidget`, `[^D]` EOT → RC, ACK-paced; `_is_txctrl_mode()` helper, `_MORSE_TXCTRL_MS=50` (437e8a1) |
 
 ---
 
@@ -99,6 +101,65 @@
 
 ### T18 — Multi-cycle colour test
 **Status:** ⬜ OPEN
+
+---
+
+## Test Block 2b — CW/Morse TxController (Paket 2a / 437e8a1)
+
+### T69 — Morse SEND: ACK-Färbung + genau 1 [TX] pro Zeichen
+1. Host Mode aktiv → CW/Morse → SEND
+2. Einige Zeichen tippen
+
+**Expected result:**
+- Zeichen erscheinen nach DATA_ACK grün/gefärbt (wie Baudot)
+- Im Monitor: genau EIN `[TX]`-Eintrag pro Tastendruck (kein Doppelsenden)
+- Sendefluss flüssig (nicht ruckelnd — sonst `_MORSE_TXCTRL_MS` senken)
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+
+---
+
+### T70 — Morse CTRL+D EOT: wartet auf letztes Zeichen
+1. SEND → Text "599" tippen → CTRL+D ([^D] erscheint orange)
+2. Nichts weiter tun
+
+**Expected result:**
+- TNC sendet "599" vollständig
+- ERST nach DATA_ACK des letzten Zeichens vor [^D] schaltet App auf
+  RECEIVE (RC)
+- NICHT vorher (kein vorzeitiges Umschalten)
+
+**Diagnose:** Schaltet zu früh → `_ack_idx`-zu-`_eot_positions`-Zuordnung
+prüfen in `tx_controller.py`
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+
+---
+
+### T71 — Morse Macro mit eingebettetem [^D]
+1. Macro mit Text + [^D] am Ende anlegen
+2. SEND → Macro abspielen
+
+**Expected result:**
+- Macro vollständig gesendet, dann RECEIVE
+- Umschaltung erst nach letztem bestätigten Zeichen (nicht mittendrin)
+- Kein Crash beim Macro-Abspielen (war vorher latenter Bug durch
+  fehlendes `char_typed` im alten QTextEdit)
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+
+---
+
+### T72 — Morse WPM-Tempo: Software interferiert nicht
+1. MSPEED-Spinbox auf verschiedene WPM-Werte setzen
+2. Text senden und beobachten
+
+**Expected result:**
+- Sendetempo ausschließlich vom TNC (MSPEED) gesteuert
+- Software-Timer (`_MORSE_TXCTRL_MS = 50`) bremst nicht und läuft nicht vor
+- Kein BUFFER_FULL-Dialog bei normalem Text
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
 
 ---
 
@@ -467,6 +528,7 @@ must not be committed; it is only a local fallback.
 | Low | Multi-cycle RTTY colour | T18 |
 | Low | Macro full integration | T19–T22 |
 | Low | Help Viewer | T27–T28 |
+| Medium | Morse TxController (Paket 2a) — hardware test pending | T69–T72 |
 
 ---
 
@@ -490,4 +552,4 @@ must not be committed; it is only a local fallback.
 
 ---
 
-*Created: 2026-05-01 | Updated: 2026-06-15 (v16) | OE3GAS | PK232PY Project*
+*Created: 2026-05-01 | Updated: 2026-06-16 (v16) | OE3GAS | PK232PY Project*

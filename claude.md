@@ -2,7 +2,7 @@
 
 > This file is the single entry point for Claude Code to understand the
 > PK232PY project. Read it completely before touching any source file.
-> Last updated: 2026-06-14
+> Last updated: 2026-06-16
 
 ---
 
@@ -31,7 +31,7 @@ Target milestone: **Beta release**.
 
 ---
 
-## Current Status (v16 — 2026-06-14)
+## Current Status (v16 — 2026-06-16)
 
 ### What is done
 
@@ -72,7 +72,9 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
 - Packet: Remaining toggle/button tests (T43–T51)
 - PACTOR/AMTOR: identity, focus tests (T52–T58)
 - APRS: buffer cleared on mode switch (T65)
-- CTRL+D (EOT) for AMTOR and CW/Morse
+- CTRL+D EOT: Paket 2b (AMTOR) + Paket 3 (Stop Sending) offen — siehe
+  `Backlog.md` für vollständige Architektur-Entscheidungen.
+- Hardware-Test Paket 2a (Morse): steht aus.
 
 ---
 
@@ -117,6 +119,10 @@ src/pk232py/
     main_window.py       MainWindow — QStackedWidget, menus, mode switching
     screens/
       opmode_rtty_base.py   RttyBaseScreen, MacroStore, theme helpers
+      tx_controller.py      TxController — pure ACK-driven TX state machine for
+                            character-ACK modes (Baudot, ASCII, Morse, soon
+                            AMTOR). Was baudot_tx_controller.py until Paket 1
+                            (cc2adff); no serial I/O, no widget refs.
       baudot_screen.py / ascii_screen.py / amtor_screen.py / morse_screen.py
       pactor_screen.py / navtex_screen.py / signal_screen.py / fax_screen.py
       packet_screen.py     PacketBaseScreen + HFPacketScreen + VHFPacketScreen
@@ -236,6 +242,33 @@ Python-generated files must not be deployed via PowerShell copy
 Windows `copy` command. `main_window.py` is prone to corruption at ~line 1503
 (second file appended) — check for this and delete manually if needed.
 
+### 11. TxController architecture
+
+`TxController` (`tx_controller.py`, renamed from `BaudotTxController` in
+Paket 1 / cc2adff) is the **mode-agnostic** ACK-driven TX/RX state machine —
+no serial I/O, no widget refs. Key learnings from the 2026-06-16 session:
+
+- `_is_txctrl_mode(mode)` in `main_window.py` is the **single source of truth**
+  for which modes are driven by `TxController`. Currently
+  `("Baudot RTTY", "ASCII RTTY", "CW / Morse")`; AMTOR is added in Paket 2b.
+- **Morse** is ACK-paced — the TNC controls WPM. The software timer is only an
+  overflow safety net: `_MORSE_TXCTRL_MS = 50` in `main_window.py`, fed via
+  `set_mspeed_ms()` (direct-ms interval for modes with no meaningful Baud rate).
+- **AMTOR EOT ≠ RC** (verified against the Technical Reference Manual):
+  AMTOR-ARQ `[^D]` → `OV` (OVER — polite turnaround, ISS↔IRS role swap, link
+  stays up); AMTOR-FEC `[^D]` → `RC` (no connection concept, like Baudot).
+- **Packet uses NO TxController and NO `[^D]`.** AX.25 packetises at the ETB
+  character and has no character-by-character ACK, so the EOT-marker concept
+  does not fit. Packet needs a Stop-button instead of an EOT marker.
+- **Stop Sending** (Paket 3, open): AMTOR → `AM` (mnemonic; standby + flush TNC
+  TX buffer — NOT `R`, which does not flush); Baudot/ASCII/Morse → `RC` +
+  flush the local `TxController` buffer (`on_send_stop()` + `clear()`).
+- `char_ready` guard in `_wire_mode_callbacks`: only wire it when
+  `not hasattr(tx, 'char_typed')`. A `TxInputWidget` already emits `char_typed`,
+  so wiring `char_ready` as well would double-send.
+
+See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
+
 ---
 
 ## Reference Documents in Project Knowledge
@@ -249,7 +282,7 @@ Windows `copy` command. `main_window.py` is prone to corruption at ~line 1503
 | `TX_STATE_MACHINE.md` | TX character flow, paste handling, backspace sentinel |
 | `Eventfilter_architecture.md` | Three-level event filter architecture |
 | `Backlog.md` | Prioritised open work items |
-| `Testplan.md` | Test cases T01–T65 with pass/fail status |
+| `Testplan.md` | Test cases T01–T72 with pass/fail status |
 | `pk232py_sources.txt` | Complete source code export (authoritative) |
 | `AEA-PK-232-TechnicalReferenceManual.pdf` | Hardware reference (Host Mode protocol) |
 | `PPWIN.HLP` | PCPackRatt help file (reference for UI feature parity) |

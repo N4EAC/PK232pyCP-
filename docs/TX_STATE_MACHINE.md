@@ -1,9 +1,12 @@
 # PK232PY -- TX/RX State Machine Reference
 
-**Scope:** Baudot RTTY and ASCII RTTY opmode screens.
-**Implementation:** `BaudotTxController` in `src/pk232py/ui/screens/baudot_tx_controller.py`
+**Scope:** all character-ACK opmode screens — Baudot RTTY, ASCII RTTY and
+CW/Morse (since Paket 2a / 437e8a1); AMTOR planned for Paket 2b.
+**Implementation:** `TxController` in `src/pk232py/ui/screens/tx_controller.py`
+(renamed from `BaudotTxController` / `baudot_tx_controller.py` in Paket 1,
+cc2adff — the controller is mode-agnostic: no serial I/O, no widget refs).
 **TxInputWidget** in `src/pk232py/ui/screens/opmode_rtty_base.py`
-**Last updated:** 2026-05-03 (v10b)
+**Last updated:** 2026-06-16 (v16)
 
 ---
 
@@ -36,7 +39,7 @@
 
 ## 3. Three-Index System (proven 2026-05-02)
 
-`BaudotTxController` maintains three indices into `_arr`:
+`TxController` maintains three indices into `_arr`:
 
 | Index | Advances when | Meaning |
 |-------|--------------|---------|
@@ -213,16 +216,21 @@ All control markers use the format `[^X]` or `[^X:param]`:
 
 ### Implemented
 
-| Key | Marker | Doc chars | Colour | Function |
-|-----|--------|-----------|--------|----------|
-| `CTRL+D` | `[^D]` | 4 | White on orange `#cc4400` | Switch to RECEIVE when reached during TX |
+| Key | Marker | Doc chars | Sentinel | Colour | Function |
+|-----|--------|-----------|----------|--------|----------|
+| `CTRL+D` | `[^D]` | 4 (fixed) | `\x04` | White on orange `#cc4400` | Switch to RECEIVE when reached during TX |
+| `CTRL+T:n` | `[^T:n]` | variable — `[^T:5]` = 6 | `\x1b` + str(n) (e.g. `"\x1b5"`, `"\x1b10"`) | White on purple `#8800cc` | RECEIVE, wait n seconds, then SEND (n = 1–10, QInputDialog). Since v13 |
+
+Both markers are tracked in `TxInputWidget._eot_positions`, a list of
+`{'pos': int, 'len': int}` dicts — variable marker length is handled per entry,
+so Backspace deletes the whole marker atomically and adjusts
+`_doc_extra -= (len - 1)`.
 
 ### Planned
 
-| Key | Marker | Doc chars | Colour | Function |
-|-----|--------|-----------|--------|----------|
-| `CTRL+S` | `[^S]` | 4 | White on blue `#0044cc` | Switch to SEND when reached |
-| `CTRL+T:n` | `[^T:5]` | 7 | White on purple `#8800cc` | RECEIVE, wait n seconds, SEND |
+*(none)* — `CTRL+S` / `[^S]` ("switch to SEND when reached") was **dropped**:
+decided not to implement. The *(planned)* `[^S]` rows in §7's `_doc_extra`
+table above are retained only as a worked example of the general formula.
 
 ### Implementation Checklist for New Control Characters
 
@@ -237,7 +245,7 @@ When implementing a new control character (e.g. `[^S]`), update these 4 places:
 3. **`_on_macro_clicked` in `main_window.py`** -- detect `[^S]` in macro text,
    insert visually, `_doc_extra += 3`, emit correct sentinel via `char_typed`
 
-4. **`BaudotTxController.on_char_typed`** -- handle the sentinel char
+4. **`TxController.on_char_typed`** -- handle the sentinel char
    (e.g. `\x13` for `[^S]`) with appropriate state transition
 
 `MacroTextEdit` in `macro_store.py` needs CTRL+S support for entering
@@ -259,7 +267,7 @@ the marker in the Edit Macros dialog (same approach as CTRL+D there).
 ## 10. Backspace Sentinel
 
 When Backspace is pressed in `TxInputWidget`, `char_typed.emit('\x08', '')`
-is sent to `BaudotTxController.on_char_typed()` as a sentinel:
+is sent to `TxController.on_char_typed()` as a sentinel:
 
 ```python
 if char == '\x08':
@@ -347,5 +355,38 @@ frames must write synchronously to the port, not via a queue.
 | DATA_ACK from TNC | | `01 5F 58 58 00 17` |
 | Exit Host Mode | `HO` (HOST OFF) | `01 4F 48 4F 4E 17` |
 | Monitor/RX frame | | `01 3F xx 17` |
+
+---
+
+## 16. Mode-specific EOT behaviour (verified against the Technical Reference Manual, session 2026-06-16)
+
+The `[^D]` EOT marker does **not** map to the same TNC action in every mode.
+AMTOR in particular must NOT use `RC` (which would drop the link).
+
+| Mode | EOT action | TNC command | Note |
+|------|-----------|-------------|------|
+| Baudot RTTY | RC | `RC` | Since v10, proven |
+| ASCII RTTY | RC | `RC` | Like Baudot |
+| CW/Morse | RC | `RC` | Paket 2a, TxController ACK-paced |
+| AMTOR-ARQ | OVER | `OV` | Polite turnaround, ISS↔IRS role swap, link stays up. NOT ACHG (= Break-In)! |
+| AMTOR-FEC | RC | `RC` | No connection concept |
+| Packet | — | — | No EOT; packetises at ETB; needs a Stop button (`AM`) |
+
+Implementation note: `_on_baudot_eot()` must branch by mode for AMTOR
+(ARQ → `OV`, FEC → `RC`), and AMTOR must be added to `_is_txctrl_mode()`
+(Paket 2b, open).
+
+---
+
+## 17. TxController pacing per mode
+
+| Mode | Pacing mechanism | Parameter |
+|------|------------------|-----------|
+| Baudot/ASCII | QTimer → mspeed from config (Baud) | `set_mspeed(baud)` |
+| CW/Morse | ACK-paced; timer = overflow safety net only | `set_mspeed_ms(50)` = `_MORSE_TXCTRL_MS` |
+| AMTOR (Paket 2b) | ACK-paced; 3-character ARQ blocks | `set_mspeed_ms(TBD)` |
+
+`set_mspeed_ms(ms)` (added in Paket 1) takes a direct ms interval for modes
+that have no meaningful Baud rate; `set_mspeed(baud)` only maps Baud → ms.
 
 *OE3GAS | PK232PY Project | AEA PK-232MBX Host Mode*
