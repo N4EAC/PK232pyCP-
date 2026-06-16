@@ -63,6 +63,11 @@ APP_TITLE = "PK232PY"
 # control). Adjustable on hardware test: flow stalls → lower; overflow → raise.
 _MORSE_TXCTRL_MS = 50
 
+# AMTOR: the TNC controls the 100 Bd ARQ timing (3-char blocks), so the
+# TxController is ACK-paced just like Morse; this timer is only a
+# buffer-overflow safety net. Adjust down if TX flow stutters on hardware.
+_AMTOR_TXCTRL_MS = 50
+
 
 class MainWindow(QMainWindow):
     """Main application window.
@@ -1164,11 +1169,26 @@ class MainWindow(QMainWindow):
             m = msg.lower()
             if "connected" in m and "disconnect" not in m:
                 status = "CONNECTED"
+                # AMTOR ARQ: CONNECTED means we are ISS (Information Sending
+                # Station). There is no SEND button / XM frame for AMTOR, so the
+                # ARQ link coming up is what starts the TxController — chars
+                # already queued in TxInputWidget begin flowing to the TNC.
+                # mode.name is always "AMTOR ARQ" here (ModeManager never
+                # produces "AMTOR FEC"; FEC is a screen sub-state).
+                mode = self._modes.current_mode
+                if mode is not None and mode.name == "AMTOR ARQ":
+                    self._tx_ctrl.on_send_start()
+                    self._log_monitor("[AMTOR] CONNECTED → TxController started")
             elif "disconnect" in m:
                 # PactorScreen uses "DISCONN"; PacketBaseScreen uses "DISCONNECTED"
                 from .screens.packet_screen import PacketBaseScreen
                 status = "DISCONNECTED" if isinstance(screen, PacketBaseScreen) \
                          else "DISCONN"
+                # AMTOR: link gone — stop the controller and discard queued chars.
+                mode = self._modes.current_mode
+                if mode is not None and mode.name == "AMTOR ARQ":
+                    self._tx_ctrl.on_send_stop()
+                    self._log_monitor("[AMTOR] DISCONNECTED → TxController stopped")
             elif "calling" in m or "connect request" in m:
                 status = "CALLING"
             elif "fec" in m:
@@ -1345,6 +1365,10 @@ class MainWindow(QMainWindow):
             #          is only a buffer-overflow safety net (_MORSE_TXCTRL_MS).
             if mode.name == "CW / Morse":
                 self._tx_ctrl.set_mspeed_ms(_MORSE_TXCTRL_MS)
+            elif mode.name in ("AMTOR ARQ", "AMTOR FEC"):
+                # AMTOR: TNC controls 100 Bd ARQ timing; controller is
+                # ACK-paced. Small timer only as buffer-overflow safety net.
+                self._tx_ctrl.set_mspeed_ms(_AMTOR_TXCTRL_MS)
             else:
                 try:
                     mspeed = int(self._app_config.baudot.mspeed)
@@ -1380,11 +1404,13 @@ class MainWindow(QMainWindow):
         """True for modes driven by TxController (char-ACK + EOT marker).
 
         These use TxInputWidget.char_typed → TxController.on_char_typed and the
-        ACK-paced send path (colour tracking, [^D] EOT). AMTOR is intentionally
-        NOT here — it stays on the legacy path until package 2b.
+        ACK-paced send path (colour tracking, [^D] EOT). AMTOR ARQ/FEC joined
+        in package 2b — note the mode names are "AMTOR ARQ" / "AMTOR FEC"
+        (ModeManager constants), never the ComboBox display name "AMTOR".
         """
         return mode is not None and mode.name in (
-            "Baudot RTTY", "ASCII RTTY", "CW / Morse"
+            "Baudot RTTY", "ASCII RTTY", "CW / Morse",
+            "AMTOR ARQ", "AMTOR FEC",
         )
 
     def _on_screen_send(self, active: bool) -> None:
@@ -1680,10 +1706,53 @@ class MainWindow(QMainWindow):
         rx.ensureCursorVisible()
 
     def _on_baudot_eot(self) -> None:
-        """CTRL+D EOT marker reached — switch to RECEIVE."""
-        screen = self._opmode_stack.currentWidget()
-        if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
-            screen.btn_receive.setChecked(True)
+        """CTRL+D EOT marker reached — mode-specific turnaround action.
+
+        Baudot / ASCII / CW+Morse:
+            Trigger the RECEIVE button → RC sent to TNC.
+
+        AMTOR ARQ sub-mode (btn_fec and btn_selfec NOT checked):
+            Send the PTOVER character (\\x1A / Ctrl-Z) into the now-empty TX
+            stream. The TNC treats it like the RECEIVE character: it waits for
+            the buffer to drain (already done — TxController fires eot_reached
+            only after the last DATA_ACK) then swaps ISS↔IRS, keeping the ARQ
+            link alive. Do NOT use the OV host command — that fires immediately
+            without waiting for the buffer (Technical Reference Manual p.179).
+
+        AMTOR FEC sub-mode (btn_fec or btn_selfec IS checked):
+            Stop the TxController. FEC has no connection concept, so no extra
+            TNC command is needed — the TNC returns to AMTOR standby naturally.
+
+        AMTOR has no btn_receive, so the RECEIVE-toggle path below is reached
+        only by the RTTY/Morse screens. ARQ vs FEC is read from the screen's
+        button sub-state — never from mode.name (always "AMTOR ARQ").
+        """
+        mode = self._modes.current_mode
+        mode_name = mode.name if mode is not None else ""
+
+        if mode_name == "AMTOR ARQ":
+            screen = self._opmode_stack.currentWidget()
+            # ARQ vs FEC is a screen sub-state: btn_fec / btn_selfec are
+            # checked while FEC / SELFEC is the active AMTOR sub-mode.
+            is_fec = (
+                getattr(getattr(screen, 'btn_fec',    None), 'isChecked', lambda: False)()
+                or
+                getattr(getattr(screen, 'btn_selfec', None), 'isChecked', lambda: False)()
+            )
+            if is_fec:
+                # FEC sub-mode: no ARQ link — just stop the controller.
+                self._tx_ctrl.on_send_stop()
+                self._log_monitor("[AMTOR] EOT — FEC TX done, controller stopped")
+            else:
+                # ARQ sub-mode: PTOVER → polite turnaround, link stays up.
+                if self._serial.is_connected and self._serial.is_host_mode:
+                    self._serial.send_data(b'\x1a', channel=0)
+                    self._log_monitor("[AMTOR] EOT — PTOVER (\\x1A) sent, ARQ turnaround")
+        else:
+            # Baudot / ASCII / Morse: visual RECEIVE toggle triggers RC.
+            screen = self._opmode_stack.currentWidget()
+            if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
+                screen.btn_receive.setChecked(True)
 
     def _on_baudot_timed_send(self, n: int) -> None:
         """[^T:n] timed marker reached — RECEIVE, wait n seconds, then SEND.

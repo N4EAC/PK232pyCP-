@@ -42,7 +42,7 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
-    MacroStore, MacroEditDialog,
+    MacroStore, MacroEditDialog, TxInputWidget,
     make_toggle_button, add_hline, apply_app_style,
     style_rx_widget, style_tx_widget,
     BTN_W, SPACING, MACRO_COUNT,
@@ -376,8 +376,13 @@ class AmtorScreen(QWidget):
 
         add_hline(root)
 
-        # --- TX-Fenster (5 Zeilen) ----------------------------------------
-        self.tx_input = QTextEdit()
+        # --- TX-Fenster (5 Zeilen) — TxInputWidget für char-level ACK-Tracking
+        # Wie Baudot/ASCII/Morse: liefert char_typed, [^D]-Erkennung,
+        # colour_at() und Edit-Schutz. Ersetzt das frühere einfache QTextEdit
+        # (Legacy char_ready-Pfad), damit AMTOR den TxController nutzen kann.
+        # [^D] bei AMTOR-ARQ → PTOVER-Zeichen (\x1A) in den leeren Puffer;
+        # bei AMTOR-FEC → RC (wie Baudot/Morse). Entscheidung in _on_baudot_eot.
+        self.tx_input = TxInputWidget()
         self.tx_input.setFont(QFont("Courier New", 10))
         self.tx_input.setPlaceholderText(
             "TX – Eingabe hier …  (ITA-2: nur GROSSBUCHSTABEN)"
