@@ -151,7 +151,9 @@ against this file. Git branch/hash are irrelevant to the working process.
 The export now covers `src/pk232py/**/*.py` (production code first) **and**
 `tools/**/*.py` (standalone tools, listed after). Markdown is still exported
 only from `src/pk232py/help/` — so `tools/README.md` is not included, which
-is fine.
+is fine. The project docs (`CLAUDE.md`, `docs/Backlog.md`, `docs/Testplan.md`,
+the state-machine `.md` files) are **NOT** in the export — they are uploaded to
+the Claude project knowledge separately.
 
 ### 2. Workflow
 
@@ -175,6 +177,12 @@ The Windows Prolific USB driver only delivers ACKs when `read()` is called
 directly on the port. Queue/worker delays ACKs until port close.
 This is a proven hardware constraint — not negotiable.
 
+**Proof (historical prototypes):** the direct-read approach (`pk232_hostmode.py`)
+worked; the worker-queue approach (`baudot_tx_test.py`) did NOT — ACKs only
+arrived on port close. These prototypes are not in the repo; the lesson is
+baked into `SerialManager` (which owns the port and reads directly). Anyone
+who reintroduces a queue/worker for Host Mode frames breaks the ACK path.
+
 After the Host Mode subprocess exits, always create a **fresh `serial.Serial()`
 object**. Reusing the old object causes 20–35 second buffering delays.
 
@@ -188,7 +196,13 @@ object**. Reusing the old object causes 20–35 second buffering delays.
 - Both `HP Y` and `HP $00` are valid success responses
 - `MOPT` = Morse Option (CW); `ARQTOL` = AMTOR ARQ tolerance
 - `PT` mnemonic = PACTIME, not PACTOR. PACTOR activation = verbose `PACTOR\r\n`
-- FAX mode stays in Host Mode (FA command); does not exit it
+- FAX mode stays in Host Mode (FA command); does not exit it — there is **no
+  verbose_command path for FAX** (unlike PACTOR, which leaves Host Mode)
+- **FAX decoding is done by the TNC itself:** the PK-232 demodulates the FAX
+  audio and streams the image as ESC-L pixel runs over Host Mode; the app only
+  renders those pixels. The `tools/` WEFAX decoder is a *closed-loop test*
+  substitute for the TNC (generator → WAV → decoder, no radio/hardware) and is
+  **never integrated into `pk232py`** (it is GPL v3; the app is GPL v2)
 
 ### 5. UI conventions
 
@@ -214,6 +228,18 @@ because `obj` may be an internal Qt child widget.
 
 **Level 3 — ScreenFocusController:** `QObject` installed directly on individual
 QLineEdit fields. Reliable FocusIn/FocusOut tracking at field scope.
+
+*Why field-scoped, not app-wide:* `isinstance(obj, QLineEdit)` in the app-wide
+Level-1 filter is unreliable — `obj` may be an internal Qt child widget, not the
+QLineEdit itself. Installing the controller directly on each field avoids that.
+
+*Registered fields (editable QLineEdit only):*
+- `PactorScreen` → `le_dest`
+- `AmtorScreen` → `le_dest`
+- `PacketBaseScreen` → `le_dest`, `le_unproto`
+
+QLabel identity fields (`lbl_mycall`, `lbl_myptcall`, …) are display-only and
+are **NOT** registered — they are labels, not input fields.
 
 ### 7. Opmode switch state machine
 
@@ -301,8 +327,10 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
 
 ### Medium term
 
-4. **Clear TX / Clear RX** — add to AMTOR, HF Packet, VHF Packet, Morse screens
-5. **CTRL+D (EOT)** — extend to AMTOR and CW/Morse
+4. **CTRL+D EOT — Paket 2b (AMTOR):** ARQ → `OV`, FEC → `RC`; add AMTOR to
+   `_is_txctrl_mode()`. CW/Morse (Paket 2a) is done — hardware test pending.
+5. **Stop Sending — Paket 3:** Stop/Abort-TX button on all TX-capable screens
+   (AMTOR → `AM`; Baudot/ASCII/Morse → `RC` + flush; Packet TBD). See §11.
 6. **Theme persistence** — `[UI]` section in INI, `Configure → Appearance` dialog
 7. **Tooltip system** — central `tooltips.py`, apply to all screens
 8. **Help system** — split `help_baudot.md` into topic files, add Help buttons
@@ -312,6 +340,59 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
 9. **APRS Phase 2** — beacon TX, beacon config UI, MHEARD APRS stations
 10. **PACTOR/AMTOR identity** — wire parameter dialogs to TNC commands (T52–T58)
 11. **Parameter integration** — load/save screen parameters from AppConfig on mode switch
+
+---
+
+## Known Gotchas & Pitfalls
+
+A running collection of "you must know this or you'll break something" facts.
+Grows over time.
+
+### Serial / Host Mode
+
+- **Direct serial I/O only — never a queue/worker for Host Mode frames.** The
+  single most important constraint in the project. See §3.
+- **Fresh `serial.Serial()` after the Host Mode subprocess exits.** Reusing the
+  old object → 20–35 s buffering delays. See §3.
+- **`write_verbose_wait()` race condition (fixed).** Lives in
+  `serial_manager.py` (`_IDLE_S = 0.12`), used by `params_uploader.py` during
+  the C4 upload phase.
+  - *Symptom:* parameter uploads intermittently returned `?What?`.
+  - *Cause:* the method returned immediately when the `cmd:` prompt appeared,
+    but the TNC was still writing — the next command overlapped the unfinished
+    response, corrupting it.
+  - *Fix:* after the `cmd:` prompt is seen, wait for **120 ms of idle** (no new
+    byte in the buffer) before returning. An `idle_since` timer is reset on
+    every new byte; the method returns only after `_IDLE_S = 0.12` s without
+    fresh data.
+
+### TNC / firmware v7.1
+
+- **PACTOR-only commands → `?What?` without the PACTOR option:** `MYPTCALL`,
+  `ARQTOL`, `MOPT`, `EXPERT OFF`, `PTHUFF`, `PT200`, `PTOVER`. Gate them behind
+  `SerialManager.has_pactor`. See §9.
+- **FAX never leaves Host Mode** (no verbose path); the TNC decodes the audio
+  and streams ESC-L pixels. See §4.
+- **`MOPT` = Morse Option, `ARQTOL` = AMTOR ARQ tolerance** — both are
+  PACTOR-firmware-only, despite the names suggesting CW/AMTOR.
+
+### UI / PyQt6
+
+- **Identity fields are `QLabel`, not `QLineEdit`** — only editable fields get a
+  `ScreenFocusController`. See §5 / §6.
+- **`char_ready` double-send trap:** wire `char_ready` only when
+  `not hasattr(tx, 'char_typed')` — a `TxInputWidget` already emits `char_typed`,
+  so wiring both double-sends every character. See §11.
+- **`main_window.py` encoding corruption** at ~line 1503 (second file appended
+  on PowerShell copy). See §10.
+
+### Repo / tooling
+
+- **`CLAUDE.md` is tracked by git as lowercase `claude.md`** on the
+  case-insensitive Windows filesystem. `git add CLAUDE.md` may not stage it —
+  use `git add claude.md`.
+- **Project docs are not in `pk232py_sources.txt`** — upload them to the Claude
+  project knowledge separately. See §1.
 
 ---
 
