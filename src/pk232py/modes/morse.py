@@ -100,7 +100,9 @@ class MorseMode(BaseMode):
         mspeed:  int  = 20,     # send speed WPM
         mweight: int  = 10,     # dit/dah weight (10=standard)
         mid:     int  = 0,      # Morse ID interval minutes (0=off)
-        eas:     bool = False,  # echo as sent
+        eas:     bool = True,   # echo as sent — ON by default so the TX
+                                # window colours at actual send time ($2F),
+                                # not at buffer-accept time ($5F DATA_ACK).
         wordout: bool = False,  # send only complete words
         xmitok:  bool = True,
     ) -> None:

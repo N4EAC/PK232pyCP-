@@ -1109,9 +1109,28 @@ class MainWindow(QMainWindow):
         if hasattr(mode, "on_fec_received"):
             mode.on_fec_received = self._on_mode_data_received
 
+        # EAS (Echo As Sent) — Morse colours the TX window at the *actual*
+        # send moment ($2F echo, WPM-paced), not at buffer-accept time
+        # ($5F DATA_ACK). The TxController must be in EAS mode for Morse and
+        # OUT of it for every other mode — set this unconditionally on every
+        # mode switch, even for modes (e.g. AMTOR) that have no echo callback,
+        # otherwise on_data_ack() would stop colouring after a Morse session.
+        self._tx_ctrl.set_eas_mode(mode.name == "CW / Morse")
+
         # Echo ($2F)
         if hasattr(mode, "on_echo_received"):
-            mode.on_echo_received = self._on_mode_echo_received
+            if mode.name == "CW / Morse":
+                # Each $2F byte = one character actually keyed on the air.
+                # Route it to TxController.on_echo_char() so the TX window
+                # colours in step with the audible keying. (With WORDOUT ON
+                # the TNC may batch a whole word into one frame — hence one
+                # on_echo_char() call per byte received.)
+                def _on_morse_echo(data: bytes) -> None:
+                    for _ in data:
+                        self._tx_ctrl.on_echo_char()
+                mode.on_echo_received = _on_morse_echo
+            else:
+                mode.on_echo_received = self._on_mode_echo_received
 
         # Link messages → log + screen status label
         if hasattr(mode, "on_link_message"):

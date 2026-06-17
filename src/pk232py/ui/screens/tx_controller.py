@@ -98,6 +98,8 @@ class TxController(QObject):
         self._cycle_start = 0        # SEND cycle anchor for colour_at
         self._send_active = False
         self._mspeed_ms   = 150      # default 50 Baud
+        self._eas_mode: bool = False  # True → colour on $2F echo, not $5F ACK
+        self._echo_idx: int  = 0      # next arr index to colour on echo
 
         self._tx_queue: list[str] = []
         self._tx_timer = QTimer(self)
@@ -120,6 +122,39 @@ class TxController(QObject):
         """
         self._mspeed_ms = max(1, int(ms))
         logger.debug("MSPEED set directly → %dms/char", self._mspeed_ms)
+
+    def set_eas_mode(self, enabled: bool) -> None:
+        """Enable/disable EAS (Echo As Sent) colouring mode.
+
+        When enabled, on_data_ack() only advances internal bookkeeping
+        (for EOT tracking) but does NOT emit colour_char or show_in_rx.
+        Those signals are emitted instead by on_echo_char(), which is
+        called when the TNC sends a $2F ECHO frame (= character actually
+        being sent over the air).
+        """
+        self._eas_mode = enabled
+        self._echo_idx = self._cycle_start  # align to current cycle
+
+    def on_echo_char(self) -> None:
+        """Called per character from $2F ECHO frame (EAS mode only).
+
+        Colours the next uncoloured TX char and appends it to RX window.
+        Mirrors the visual part of on_data_ack(), but fires at the real
+        send moment, not at buffer-accept time.
+        """
+        idx = self._echo_idx
+        if idx >= len(self._arr):
+            logger.debug("Echo idx=%d beyond arr=%d — ignored", idx, len(self._arr))
+            return
+        if idx < self._cycle_start:
+            logger.debug("Late echo ignored idx=%d cycle=%d", idx, self._cycle_start)
+            return
+        e = self._arr[idx]
+        self._echo_idx += 1
+        logger.debug("ECHO colour #%d char=%r", idx, e['char'])
+        self.colour_char.emit(idx, True)
+        display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
+        self.show_in_rx.emit(display)
 
     def on_char_typed(self, char: str, display: str) -> None:
         """Called on every keystroke — regardless of SEND/RECEIVE state.
@@ -165,6 +200,9 @@ class TxController(QObject):
         # arrive with idx=_ack_idx < _cycle_start and are all ignored,
         # meaning none of the new cycle's chars get colour_at() called.
         self._ack_idx = self._cycle_start
+        if self._eas_mode:
+            # EAS: echo colouring must restart from the same cycle anchor.
+            self._echo_idx = self._cycle_start
         unsent = self._arr[self._tx_sent_idx:]
         for e in unsent:
             self._queue_char(e['char'])
@@ -194,6 +232,8 @@ class TxController(QObject):
         # on_send_start will set _ack_idx = _cycle_start anyway, so this
         # just keeps the state consistent during RECEIVE.
         self._ack_idx = self._tx_sent_idx
+        # EAS: echo colouring trails ack — keep it consistent on stop.
+        self._echo_idx = self._tx_sent_idx
 
     def on_data_ack(self) -> None:
         """Called on DATA_ACK frame ($5F XX XX $00) from TNC.
@@ -223,9 +263,15 @@ class TxController(QObject):
         e['sent'] = True
         self._ack_idx += 1
         logger.debug("DATA_ACK #%d char=%r", idx, e['char'])
-        self.colour_char.emit(idx, True)
-        display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
-        self.show_in_rx.emit(display)
+        if not self._eas_mode:
+            # Normal mode: colour immediately on ACK (Baudot/ASCII/AMTOR).
+            self.colour_char.emit(idx, True)
+            display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
+            self.show_in_rx.emit(display)
+        else:
+            # EAS mode (Morse): visual colouring deferred to on_echo_char().
+            # ACK only advances bookkeeping; echo_idx trails behind ack_idx.
+            logger.debug("EAS: ACK #%d bookkeeping only, colour deferred", idx)
         rem = len(self._arr) - self._ack_idx
         self.status_msg.emit(
             f"ACK #{idx + 1} — {rem} remaining" if rem
@@ -246,6 +292,7 @@ class TxController(QObject):
         self._tx_sent_idx = 0
         self._ack_idx     = 0
         self._cycle_start = 0
+        self._echo_idx    = 0
         self._send_active = False
         self._tx_timer.stop()
         self._tx_queue.clear()
