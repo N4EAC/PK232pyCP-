@@ -133,7 +133,10 @@ class TxController(QObject):
         being sent over the air).
         """
         self._eas_mode = enabled
-        self._echo_idx = self._cycle_start  # align to current cycle
+        # Initialise the echo pointer to the current cycle anchor when EAS is
+        # (re)enabled at mode switch. Afterwards _echo_idx advances only in
+        # on_echo_char() and resets only in clear() — it is monotonic.
+        self._echo_idx = self._cycle_start
 
     def on_echo_char(self) -> None:
         """Called per character from $2F ECHO frame (EAS mode only).
@@ -141,14 +144,35 @@ class TxController(QObject):
         Colours the next uncoloured TX char and appends it to RX window.
         Mirrors the visual part of on_data_ack(), but fires at the real
         send moment, not at buffer-accept time.
+
+        The echo stream is a faithful, in-order replay of every character the
+        TNC actually transmitted. _echo_idx therefore advances **purely
+        monotonically** — it is NEVER reset by on_send_start()/on_send_stop(),
+        only by clear(). That is what lets a slow echo which straggles past a
+        SEND → RECEIVE → SEND turnaround still colour its OWN character instead
+        of a later cycle's character (the off-by-one symptom otherwise seen
+        after a CTRL+D cycle). The widget's relative colour_at() formula
+        (doc_offset + arr_idx − cycle_start) maps an arr_idx that now lies
+        below cycle_start to the correct earlier document position.
         """
+        # Skip marker entries the TNC never echoes (\x04 EOT, \x1b timed).
+        # They were consumed on the SEND side (timer); the echo stream contains
+        # real characters only, so the echo pointer must step over them — else
+        # a real char sent after the marker would have its echo misattributed.
+        while self._echo_idx < len(self._arr):
+            mc = self._arr[self._echo_idx]['char']
+            if mc == '\x04' or mc.startswith('\x1b'):
+                self._echo_idx += 1
+                continue
+            break
+
         idx = self._echo_idx
         if idx >= len(self._arr):
             logger.debug("Echo idx=%d beyond arr=%d — ignored", idx, len(self._arr))
             return
-        if idx < self._cycle_start:
-            logger.debug("Late echo ignored idx=%d cycle=%d", idx, self._cycle_start)
-            return
+        # NB: no "idx < _cycle_start" guard. With a monotonic echo pointer a
+        # straggler echo legitimately addresses a char below the current cycle
+        # anchor — that is exactly the case we must still colour.
         e = self._arr[idx]
         self._echo_idx += 1
         logger.debug("ECHO colour #%d char=%r", idx, e['char'])
@@ -156,13 +180,12 @@ class TxController(QObject):
         display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
         self.show_in_rx.emit(display)
 
-        # EAS: defer the EOT trigger to the real send moment. If the NEXT
-        # _arr entry is the EOT marker, the char we just echoed was the last
-        # real character — fire eot_reached now so RC is sent to the TNC only
-        # after it has finished keying that char (otherwise RC flushes the TNC
-        # and the last char never gets its $2F echo, so it never colours).
-        # _echo_idx was already advanced above, so it points at the entry
-        # following the echoed char. on_echo_char() runs in EAS mode only.
+        # EOT trigger: if the NEXT entry is the EOT marker, the char we just
+        # echoed was the last real character before [^D] — fire eot_reached now
+        # so RC is sent to the TNC only after it has finished keying that char
+        # (otherwise RC flushes the TNC and the last char never gets its $2F
+        # echo, so it never colours). Monotonic _echo_idx guarantees this fires
+        # exactly once per marker. on_echo_char() runs in EAS mode only.
         nxt = self._echo_idx
         if nxt < len(self._arr) and self._arr[nxt]['char'] == '\x04':
             logger.debug("EAS: last char echoed, EOT next → eot_reached")
@@ -213,9 +236,12 @@ class TxController(QObject):
         # arrive with idx=_ack_idx < _cycle_start and are all ignored,
         # meaning none of the new cycle's chars get colour_at() called.
         self._ack_idx = self._cycle_start
-        if self._eas_mode:
-            # EAS: echo colouring must restart from the same cycle anchor.
-            self._echo_idx = self._cycle_start
+        # NOTE: _echo_idx is intentionally NOT reset here. In EAS mode the echo
+        # stream is a continuous, in-order replay of everything sent to the TNC.
+        # Resetting it would abandon pending echoes for chars sent in the
+        # previous cycle (e.g. typed during a deferred-EOT window) and shift
+        # every following echo by one. _echo_idx advances only in
+        # on_echo_char(); it is reset only by clear(). See on_echo_char().
         unsent = self._arr[self._tx_sent_idx:]
         for e in unsent:
             self._queue_char(e['char'])
@@ -245,8 +271,9 @@ class TxController(QObject):
         # on_send_start will set _ack_idx = _cycle_start anyway, so this
         # just keeps the state consistent during RECEIVE.
         self._ack_idx = self._tx_sent_idx
-        # EAS: echo colouring trails ack — keep it consistent on stop.
-        self._echo_idx = self._tx_sent_idx
+        # NOTE: _echo_idx is intentionally NOT touched here — see on_send_start().
+        # Echoes for already-sent chars may still be in flight after a RECEIVE;
+        # abandoning them would desync the echo colouring across the turnaround.
 
     def on_data_ack(self) -> None:
         """Called on DATA_ACK frame ($5F XX XX $00) from TNC.
