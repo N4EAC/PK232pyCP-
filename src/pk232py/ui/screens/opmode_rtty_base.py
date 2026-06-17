@@ -216,9 +216,29 @@ class TxInputWidget(QTextEdit):
         return min(c.position(), c.anchor()) < self._doc_offset
 
     def _push_cursor_to_boundary(self) -> None:
-        """Move cursor to _doc_offset if it drifted into the protected zone."""
+        """Move cursor to _doc_offset if it drifted into the protected zone.
+
+        Two cases:
+        (a) Absolute position before _doc_offset — sent text; push forward.
+        (b) Cursor sits in an EARLIER block (line) than the one containing
+            _doc_offset — e.g. Up-Arrow into a fully-sent earlier line. Push
+            to _doc_offset so editing there is blocked.
+
+        Case (b) compares against the start of _doc_offset's OWN block, NOT
+        against _doc_offset itself. Comparing against _doc_offset directly
+        would also snap the cursor whenever the user edits the unsent tail of
+        the same line whose sent head lies before _doc_offset — i.e. the normal
+        "keep typing on one line after RECEIVE" case, which must stay freely
+        editable. (In practice (a) already catches earlier-line positions since
+        they are < _doc_offset; (b) is a defensive guard for that intent.)
+        """
         c = self.textCursor()
-        if c.position() < self._doc_offset:
+        offset_block_start = self.document().findBlock(self._doc_offset).position()
+        needs_push = (
+            c.position() < self._doc_offset
+            or c.block().position() < offset_block_start
+        )
+        if needs_push:
             c.setPosition(self._doc_offset)
             self.setTextCursor(c)
 
@@ -319,8 +339,14 @@ class TxInputWidget(QTextEdit):
         f_normal.setForeground(QColor(t['tx_color']))
 
         # ── Cursor movement — allow but clamp to boundary ─────────────
-        if key in (Qt.Key.Key_Left, Qt.Key.Key_Home,
-                   Qt.Key.Key_Up, Qt.Key.Key_PageUp):
+        # All directions run through _push_cursor_to_boundary() as a
+        # defensive post-correction. Left/Home/Up/PageUp can land in the
+        # protected zone directly; Right/End/Down/PageDown cannot, but the
+        # clamp is harmless and keeps the boundary invariant in one place.
+        if key in (Qt.Key.Key_Left,  Qt.Key.Key_Right,
+                   Qt.Key.Key_Home,  Qt.Key.Key_End,
+                   Qt.Key.Key_Up,    Qt.Key.Key_Down,
+                   Qt.Key.Key_PageUp, Qt.Key.Key_PageDown):
             super().keyPressEvent(ev)
             self._push_cursor_to_boundary()
             return
@@ -449,6 +475,55 @@ class TxInputWidget(QTextEdit):
                     else:
                         new_list.append(e - 1 if e >= pos else e)
                 self._eot_positions = new_list
+            return
+
+        # ── Space: send immediately and colour as sent in SEND mode ──────
+        # In Morse, a space produces a word gap (no $2F echo). In EAS mode
+        # the space would therefore never be coloured. To avoid this and
+        # prevent bypassing edit protection with uncoloured spaces, we
+        # colour the space immediately when SEND is active.
+        # In RECEIVE mode (pre-type), space stays yellow (normal).
+        if text == ' ':
+            # Resolve TxController via cached ref or parent-chain walk
+            # (same pattern as insertFromMimeData).
+            ctrl = getattr(self, '_ctrl_ref', None)
+            if ctrl is None:
+                p = self.parent()
+                while p is not None:
+                    c2 = getattr(p, '_tx_ctrl', None)
+                    if c2 is not None:
+                        ctrl = c2
+                        self._ctrl_ref = ctrl
+                        break
+                    try:
+                        p = p.parent()
+                    except Exception:
+                        break
+            send_active = getattr(ctrl, 'send_active', False) if ctrl else False
+
+            # Insert the space in normal TX colour
+            f_tx = QTextCharFormat()
+            f_tx.setForeground(QColor(get_theme()['tx_color']))
+            cur = self.textCursor()
+            space_doc_pos = cur.position()
+            cur.setCharFormat(f_tx)
+            cur.insertText(' ')
+            self.setTextCursor(cur)
+            self.char_typed.emit(' ', ' ')
+
+            if send_active:
+                # Immediately colour as sent (inverse yellow).
+                f_sent = QTextCharFormat()
+                f_sent.setForeground(QColor('#000000'))
+                f_sent.setBackground(QColor('#ddaa00'))
+                cur2 = self.textCursor()
+                cur2.setPosition(space_doc_pos)
+                cur2.movePosition(
+                    QTextCursor.MoveOperation.Right,
+                    QTextCursor.MoveMode.KeepAnchor, 1)
+                cur2.setCharFormat(f_sent)
+                cur2.setPosition(space_doc_pos + 1)  # restore cursor to end
+                self.setTextCursor(cur2)
             return
 
         # ── Enter / printable characters ──────────────────────────────
