@@ -14,8 +14,8 @@ Buttons:
   Send / Receive   prominent (wie RTTY-Screens)
   LOCK             Empfangsgeschwindigkeit auf Signal einrasten
   Toggle: WORDOUT  nur ganze Wörter senden
-  Toggle: EAS      Echo As Sent
   Toggle: MOPTT    PTT im Morse-Modus (OFF = Full Break-In)
+  (EAS ist immer ON — kein Button; TX-Umfärbung erfolgt beim $2F-Echo)
 
 Sonderzeichen (ITA-2 Morse-Kürzel, TNC-intern):
   *  oder  <  →  SK   (Ende des Kontakts)
@@ -78,7 +78,7 @@ class MorseScreen(QWidget):
     ├──────────────────────────────┴─────────────────────────┤
     │  [ SEND (prominent) ]  [ RECEIVE (prominent) ]         │
     ├────────────────────────────────────────────────────────┤
-    │  [LOCK]  [WORDOUT]  [EAS]  [MOPTT]                    │
+    │  [LOCK]  [WORDOUT]  [MOPTT]                           │
     ├────────────────────────────────────────────────────────┤
     │  Sonderzeichen-Referenz (kompakt)                      │
     ├────────────────────────────────────────────────────────┤
@@ -272,13 +272,16 @@ class MorseScreen(QWidget):
         toggle_row.addWidget(self.btn_lock)
 
         self.btn_wordout = make_toggle_button("WORDOUT")
-        self.btn_eas     = make_toggle_button("EAS")
         self.btn_moptt   = make_toggle_button("MOPTT")
 
         # MOPTT initial ON (default laut Manual)
         self.btn_moptt.setChecked(True)
 
-        for b in (self.btn_wordout, self.btn_eas, self.btn_moptt):
+        # NB: no EAS toggle. EAS (Echo As Sent) is always ON for Morse so the
+        # TX window colours at the real send moment ($2F echo). A user-facing
+        # toggle would be redundant and dangerous — EAS OFF would break the
+        # time-correct colouring. See TxController.set_eas_mode().
+        for b in (self.btn_wordout, self.btn_moptt):
             toggle_row.addWidget(b)
 
         toggle_row.addStretch()

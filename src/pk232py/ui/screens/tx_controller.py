@@ -156,6 +156,19 @@ class TxController(QObject):
         display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
         self.show_in_rx.emit(display)
 
+        # EAS: defer the EOT trigger to the real send moment. If the NEXT
+        # _arr entry is the EOT marker, the char we just echoed was the last
+        # real character — fire eot_reached now so RC is sent to the TNC only
+        # after it has finished keying that char (otherwise RC flushes the TNC
+        # and the last char never gets its $2F echo, so it never colours).
+        # _echo_idx was already advanced above, so it points at the entry
+        # following the echoed char. on_echo_char() runs in EAS mode only.
+        nxt = self._echo_idx
+        if nxt < len(self._arr) and self._arr[nxt]['char'] == '\x04':
+            logger.debug("EAS: last char echoed, EOT next → eot_reached")
+            self.status_msg.emit("EOT marker reached — switching to RECEIVE")
+            self.eot_reached.emit()
+
     def on_char_typed(self, char: str, display: str) -> None:
         """Called on every keystroke — regardless of SEND/RECEIVE state.
 
@@ -341,8 +354,18 @@ class TxController(QObject):
         if char == '\x04':
             self._tx_queue.clear()
             self._tx_timer.stop()
-            self.status_msg.emit("EOT marker reached — switching to RECEIVE")
-            self.eot_reached.emit()
+            if not self._eas_mode:
+                # Normal mode: the timer paces TX at the real RF rate, so the
+                # EOT marker is reached exactly when the last char has been
+                # sent — fire eot_reached now.
+                self.status_msg.emit("EOT marker reached — switching to RECEIVE")
+                self.eot_reached.emit()
+            else:
+                # EAS mode (Morse): the timer is only a 50 ms safety net and
+                # runs far ahead of the WPM-paced $2F echoes. Defer eot_reached
+                # to on_echo_char(), which fires it once the last real char's
+                # echo arrives — so its colouring happens before RC is sent.
+                logger.debug("EAS: EOT marker hit timer, deferring to echo")
             return
         if char.startswith('\x1b'):
             # [^T:n] timed marker — do NOT send to TNC.
