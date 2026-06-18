@@ -1126,6 +1126,10 @@ class MainWindow(QMainWindow):
                 # the TNC may batch a whole word into one frame — hence one
                 # on_echo_char() call per byte received.)
                 def _on_morse_echo(data: bytes) -> None:
+                    # One on_echo_char() per echoed BYTE. NOTE: '\r\n' is sent
+                    # as two wire bytes but the TNC echoes NO $2F byte for it
+                    # (newline has no Morse symbol), so it is excluded from
+                    # echo-pacing in TxController (_is_unkeyed) — see tx_controller.
                     for _ in data:
                         self._tx_ctrl.on_echo_char()
                 mode.on_echo_received = _on_morse_echo

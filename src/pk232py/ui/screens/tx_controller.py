@@ -172,23 +172,45 @@ class TxController(QObject):
         # (which uses _echo_idx): one $2F byte == one keyed char == one slot
         # freed in the TNC's transmit buffer.
         if self._eas_mode:
+            # DIAG (2026-06-18): one call per echoed BYTE. Log the inflight
+            # balance and the entry _echo_idx currently points at, before and
+            # after the decrement — to see where '\r\n' desyncs the count.
+            logger.debug(
+                "ECHO_IN inflight_before=%d echo_idx=%d arr_char=%r",
+                self._tnc_inflight, self._echo_idx,
+                self._arr[self._echo_idx]['char']
+                if self._echo_idx < len(self._arr) else None)
             if self._tnc_inflight > 0:
                 self._tnc_inflight -= 1
+            logger.debug("ECHO_OUT inflight_after=%d", self._tnc_inflight)
             self._pump_eas()
 
-        # Leading scan — step over only the marker entries the $2F echo stream
-        # genuinely omits, until _echo_idx reaches the entry this echo belongs to:
+        # Leading scan — step over every _arr entry that the $2F echo stream
+        # does NOT carry an echo for, until _echo_idx reaches the entry this
+        # echo belongs to:
         #   \x04          an already-fired EOT marker we now pass on a straggler
         #                 echo for a post-[^D] char (skip silently, not in RX).
         #   \x1b…         timed marker — consumed on the SEND side (skip silent).
-        # Space is NOT skipped here. Hardware test 2026-06-18 proved the TNC DOES
-        # emit a $2F echo (payload 0x20) for a Morse word gap, so a space owns
-        # its own echo call and is consumed below — skipping it here would make
-        # the next real echo land on the space and desync every later char (the
-        # permanent +1-per-space offset seen after b157209).
+        #   \r\n          newline — transmitted (CR LF bytes) but the TNC keys
+        #                 no Morse symbol and sends NO $2F echo for it
+        #                 (hardware-verified 2026-06-18). Colour it as sent and
+        #                 mirror the line break to RX, but do NOT consume this
+        #                 echo for it — this echo belongs to the NEXT real char,
+        #                 reached after the continue. Without this skip the next
+        #                 real echo would land on the \r\n and shift colouring +1
+        #                 (and inflight would have stalled — see _emit_to_tnc).
+        # Space is NOT skipped here: the TNC DOES emit a $2F echo (payload 0x20)
+        # for a Morse word gap, so a space owns its own echo call and is consumed
+        # below.
         while self._echo_idx < len(self._arr):
             mc = self._arr[self._echo_idx]['char']
             if mc == '\x04' or mc.startswith('\x1b'):
+                self._echo_idx += 1
+                continue
+            if mc == '\r\n':
+                logger.debug("ECHO skip newline #%d (no $2F echo)", self._echo_idx)
+                self.colour_char.emit(self._echo_idx, True)
+                self.show_in_rx.emit('\n')
                 self._echo_idx += 1
                 continue
             break
@@ -216,15 +238,27 @@ class TxController(QObject):
             display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
             self.show_in_rx.emit(display)
 
-        # EOT look-ahead. Timed markers (\x1b…) produce no echo, so advance over
-        # them NOW to expose a following \x04. Spaces, however, ARE echoed — each
-        # gets its own echo call — so a trailing space before [^D] is NOT skipped
-        # here; its own echo will fire the turnaround when it consumes the space
-        # and finds the \x04 next. Stop AT the \x04 (do not consume it, so a later
-        # post-[^D] straggler echo can still step over it in the leading scan).
-        while (self._echo_idx < len(self._arr) and
-               self._arr[self._echo_idx]['char'].startswith('\x1b')):
-            self._echo_idx += 1
+        # EOT look-ahead. Entries that produce no $2F echo must be advanced over
+        # NOW to expose a following \x04 — otherwise a trailing non-echoed entry
+        # before [^D] would wait forever for an echo that never comes and block
+        # the turnaround. These are the timed marker (\x1b…) and the newline
+        # (\r\n) — colour + mirror the newline since it WAS transmitted. Spaces
+        # are NOT skipped: each space gets its own $2F echo, which fires the
+        # turnaround when it consumes the space and finds the \x04 next. Stop AT
+        # the \x04 (do not consume it, so a later post-[^D] straggler echo can
+        # still step over it in the leading scan).
+        while self._echo_idx < len(self._arr):
+            mc = self._arr[self._echo_idx]['char']
+            if mc.startswith('\x1b'):
+                self._echo_idx += 1
+                continue
+            if mc == '\r\n':
+                logger.debug("ECHO look-ahead skip newline #%d", self._echo_idx)
+                self.colour_char.emit(self._echo_idx, True)
+                self.show_in_rx.emit('\n')
+                self._echo_idx += 1
+                continue
+            break
         # EOT trigger: if the next entry is the EOT marker, the entry just echoed
         # (real char or word-gap space) was the last one before [^D] — fire
         # eot_reached now so RC is sent to the TNC only after it has finished
@@ -451,6 +485,17 @@ class TxController(QObject):
 
     # ── Internal ─────────────────────────────────────────────────────
 
+    @staticmethod
+    def _is_unkeyed(char: str) -> bool:
+        """True for chars the TNC transmits but does NOT key as a Morse symbol
+        and does NOT echo with a $2F frame. Currently only the newline.
+
+        Such chars must be excluded from echo-pacing (_tnc_inflight) and skipped
+        in on_echo_char's scans, since no echo will ever arrive for them.
+        (Space IS keyed as a word gap and IS echoed — it is NOT unkeyed.)
+        """
+        return char == '\r\n'
+
     def _queue_char(self, char: str) -> None:
         """Add one char to the TX queue, advance _tx_sent_idx, kick sending.
 
@@ -508,7 +553,13 @@ class TxController(QObject):
             self.timed_send_reached.emit(n)
             return 'stop'
         self.send_to_tnc.emit(char)
-        if self._eas_mode:
+        if self._eas_mode and not self._is_unkeyed(char):
+            # \r\n IS transmitted (CR LF bytes go out) but the TNC keys no
+            # Morse symbol for it and sends NO $2F echo back (hardware-verified
+            # 2026-06-18). Counting it as inflight would stall the pump waiting
+            # for an echo that never comes, and the next real char's echo would
+            # then be misattributed to the \r\n (+1 colour shift). So do NOT
+            # credit inflight for it; on_echo_char's leading scan colours it.
             self._tnc_inflight += 1
         return 'sent'
 
@@ -523,6 +574,12 @@ class TxController(QObject):
         """
         if not self._send_active:
             return
+        # DIAG (2026-06-18): log whether the window/queue lets us pump or wait.
+        logger.debug(
+            "PUMP inflight=%d window=%d queue=%d → %s",
+            self._tnc_inflight, self._EAS_WINDOW, len(self._tx_queue),
+            "pump" if (self._tnc_inflight < self._EAS_WINDOW and self._tx_queue)
+            else "wait")
         while self._tnc_inflight < self._EAS_WINDOW and self._tx_queue:
             if self._emit_to_tnc() != 'sent':
                 break          # a marker ended the burst (or queue drained)
