@@ -56,16 +56,16 @@ from .opmode_rtty_base import (
 # ---------------------------------------------------------------------------
 
 MSG_CLASSES = [
-    ("A", "Navigationswarnungen",       True),   # (Buchstabe, Beschreibung, Pflicht)
-    ("B", "Meteorol. Warnungen",        True),
-    ("C", "Eiswarnungen",               False),
-    ("D", "Such- und Rettungsinfo",     True),
-    ("E", "Wettervorhersagen",          False),
-    ("F", "Pilotendienstnachrichten",   False),
-    ("G", "DECCA System-Info",          False),
-    ("H", "LORAN-C Info",               False),
-    ("I", "Omega System-Nachrichten",   False),
-    ("J", "SATNAV-Nachrichten",         False),
+    ("A", "Navigational warnings",      True),   # (Buchstabe, Beschreibung, Pflicht)
+    ("B", "Meteorological warnings",    True),
+    ("C", "Ice warnings",               False),
+    ("D", "Search & rescue info",       True),
+    ("E", "Weather forecasts",          False),
+    ("F", "Pilot service messages",     False),
+    ("G", "DECCA system info",          False),
+    ("H", "LORAN-C info",               False),
+    ("I", "Omega system messages",      False),
+    ("J", "SATNAV messages",            False),
 ]
 
 
@@ -138,7 +138,7 @@ class NavtexScreen(QWidget):
         info_row = QHBoxLayout()
         info_row.setSpacing(20)
 
-        for text in ("518 kHz", "100 Baud", "AMTOR Mode B / FEC", "Nur Empfang"):
+        for text in ("518 kHz", "100 Baud", "AMTOR Mode B / FEC", "Receive only"):
             lbl = QLabel(text)
             lbl.setFont(QFont("Segoe UI", 9))
             lbl.setStyleSheet("color: #8aaccc;")
@@ -150,13 +150,13 @@ class NavtexScreen(QWidget):
         add_hline(root)
 
         # --- Filter-Sektion ----------------------------------------------
-        filter_box = QGroupBox("Empfangsfilter")
+        filter_box = QGroupBox("Receive Filter")
         filter_box.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         filter_layout = QVBoxLayout(filter_box)
         filter_layout.setSpacing(6)
 
         # NAVMSG — Nachrichtenklassen
-        navmsg_label = QLabel("NAVMSG  –  Nachrichtenklassen:")
+        navmsg_label = QLabel("NAVMSG  –  Message classes:")
         navmsg_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         filter_layout.addWidget(navmsg_label)
 
@@ -170,7 +170,7 @@ class NavtexScreen(QWidget):
             cb.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
             cb.setToolTip(
                 f"{letter} – {desc}"
-                + ("\n⚠ Pflichtklasse – kann nicht deaktiviert werden" if mandatory else "")
+                + ("\n⚠ Mandatory class – cannot be disabled" if mandatory else "")
             )
             if mandatory:
                 # Pflichtklassen: Checkbox deaktivieren (immer AN)
@@ -181,13 +181,13 @@ class NavtexScreen(QWidget):
 
         msg_row.addSpacing(12)
 
-        btn_msg_all = QPushButton("Alle")
+        btn_msg_all = QPushButton("All")
         btn_msg_all.setFixedWidth(50)
         btn_msg_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_msg_all.clicked.connect(self._on_navmsg_all)
         msg_row.addWidget(btn_msg_all)
 
-        btn_msg_none = QPushButton("Keine")
+        btn_msg_none = QPushButton("None")
         btn_msg_none.setFixedWidth(50)
         btn_msg_none.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_msg_none.clicked.connect(self._on_navmsg_none)
@@ -197,7 +197,7 @@ class NavtexScreen(QWidget):
         filter_layout.addLayout(msg_row)
 
         # Legende Pflichtklassen
-        legend = QLabel("  ⚠ A, B, D = Pflichtklassen (immer aktiv)")
+        legend = QLabel("  ⚠ A, B, D = mandatory classes (always active)")
         legend.setFont(QFont("Segoe UI", 8))
         legend.setStyleSheet("color: #888888;")
         filter_layout.addWidget(legend)
@@ -209,7 +209,7 @@ class NavtexScreen(QWidget):
         filter_layout.addWidget(sep)
 
         # NAVSTN — Stationsfilter
-        navstn_label = QLabel("NAVSTN  –  Stationsfilter:")
+        navstn_label = QLabel("NAVSTN  –  Station filter:")
         navstn_label.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         filter_layout.addWidget(navstn_label)
 
@@ -220,22 +220,22 @@ class NavtexScreen(QWidget):
         self.le_navstn = QLineEdit("ALL")
         self.le_navstn.setFont(QFont("Courier New", 10))
         self.le_navstn.setFixedWidth(200)
-        self.le_navstn.setPlaceholderText("ALL  oder  YES A,P,S  oder  NO B")
+        self.le_navstn.setPlaceholderText("ALL  or  YES A,P,S  or  NO B")
         self.le_navstn.setToolTip(
-            "ALL    – alle Stationen empfangen\n"
-            "NONE   – keine Station empfangen\n"
-            "YES x  – nur diese Stationen (Buchstabenliste)\n"
-            "NO x   – diese Stationen ausschließen"
+            "ALL    – receive all stations\n"
+            "NONE   – receive no station\n"
+            "YES x  – only these stations (letter list)\n"
+            "NO x   – exclude these stations"
         )
         stn_row.addWidget(self.le_navstn)
 
-        btn_stn_all = QPushButton("Alle")
+        btn_stn_all = QPushButton("All")
         btn_stn_all.setFixedWidth(50)
         btn_stn_all.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_stn_all.clicked.connect(lambda: self.le_navstn.setText("ALL"))
         stn_row.addWidget(btn_stn_all)
 
-        btn_stn_none = QPushButton("Keine")
+        btn_stn_none = QPushButton("None")
         btn_stn_none.setFixedWidth(50)
         btn_stn_none.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         btn_stn_none.clicked.connect(lambda: self.le_navstn.setText("NONE"))
@@ -250,7 +250,7 @@ class NavtexScreen(QWidget):
 
         # --- RX-Fenster --------------------------------------------------
         # NAVTEX: kein TX, daher RX bekommt fast den gesamten Platz
-        rx_label = QLabel("Empfangene Nachrichten:")
+        rx_label = QLabel("Received messages:")
         rx_label.setFont(QFont("Segoe UI", 9))
         root.addWidget(rx_label)
 
@@ -259,10 +259,10 @@ class NavtexScreen(QWidget):
         self.rx_display.setFont(QFont("Courier New", 10))
         style_rx_widget(self.rx_display)
         self.rx_display.setPlaceholderText(
-            "NAVTEX-Nachrichten erscheinen hier …\n\n"
+            "NAVTEX messages appear here …\n\n"
             "Format:\n"
             "ZCZC PA99\n"
-            "<Nachrichtentext>\n"
+            "<message text>\n"
             "NNNN"
         )
         self.rx_display.setSizePolicy(
