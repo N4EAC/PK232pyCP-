@@ -230,6 +230,18 @@ class MacroStore:
         return value
 
 
+def apply_macro_tooltips(buttons: list, store: "MacroStore") -> None:
+    """Mirror each macro button's hover tooltip onto its stored text.
+
+    Called after the macro row is built and again whenever the edit
+    dialog closes, so the tooltip never drifts from the real content.
+    An empty macro gets a neutral hint instead of an invisible blank tooltip.
+    """
+    for i, btn in enumerate(buttons):
+        text = store.texts[i] if i < len(store.texts) else ""
+        btn.setToolTip(text.strip() or "(empty — define via Edit Macros)")
+
+
 # ---------------------------------------------------------------------------
 # MacroEditDialog
 # ---------------------------------------------------------------------------
