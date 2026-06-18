@@ -144,10 +144,10 @@ class SignalScreen(QWidget):
         info_row = QHBoxLayout()
         info_row.setSpacing(20)
         for text in (
-            "Passiver Analysemodus",
-            "Kein TX",
-            "Signal auf LSB/FSK einstellen",
-            "DCD-LED muss leuchten",
+            "Passive analysis mode",
+            "No TX",
+            "Tune the signal to LSB/FSK",
+            "DCD LED must be lit",
         ):
             lbl = QLabel(text)
             lbl.setFont(QFont("Segoe UI", 9))
@@ -159,7 +159,7 @@ class SignalScreen(QWidget):
         add_hline(root)
 
         # --- Parameter-Box -----------------------------------------------
-        param_box = QGroupBox("Analyse-Parameter")
+        param_box = QGroupBox("Analysis Parameters")
         param_box.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         param_layout = QHBoxLayout(param_box)
         param_layout.setSpacing(8)
@@ -176,11 +176,11 @@ class SignalScreen(QWidget):
         self.sb_sample.setFont(QFont("Courier New", 10))
         self.sb_sample.setFixedWidth(70)
         self.sb_sample.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.sb_sample.setSpecialValueText("Standard")
+        self.sb_sample.setSpecialValueText("Default")
         self.sb_sample.setToolTip(
-            "Anzahl der Analyse-Samples.\n"
-            "0 = TNC-Standard verwenden.\n"
-            "Höhere Werte = längere, genauere Analyse."
+            "Number of analysis samples.\n"
+            "0 = use the TNC default.\n"
+            "Higher values = longer, more accurate analysis."
         )
         param_layout.addWidget(self.sb_sample)
 
@@ -199,10 +199,10 @@ class SignalScreen(QWidget):
         # Wide Shift Toggle
         self.btn_wideshft = make_toggle_button("Wide Shift")
         self.btn_wideshft.setToolTip(
-            "WIDESHFT ON: Filter für Signale >200 Hz Shift\n"
-            "(kommerzielle Stationen außerhalb Amateurbänder)\n\n"
-            "WIDESHFT OFF: für 170/200 Hz Shift\n"
-            "(Amateurfunk-Standard)"
+            "WIDESHFT ON: filter for signals >200 Hz shift\n"
+            "(commercial stations outside the amateur bands)\n\n"
+            "WIDESHFT OFF: for 170/200 Hz shift\n"
+            "(amateur-radio standard)"
         )
         param_layout.addWidget(self.btn_wideshft)
 
@@ -212,7 +212,7 @@ class SignalScreen(QWidget):
         add_hline(root)
 
         # --- Ergebnis-Box ------------------------------------------------
-        result_box = QGroupBox("Analyse-Ergebnis")
+        result_box = QGroupBox("Analysis Result")
         result_box.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         result_layout = QVBoxLayout(result_box)
         result_layout.setSpacing(6)
@@ -245,7 +245,7 @@ class SignalScreen(QWidget):
 
         # Erkannte Betriebsart
         mode_row = QHBoxLayout()
-        mode_row.addWidget(_field_label("Betriebsart:"))
+        mode_row.addWidget(_field_label("Mode:"))
         self.lbl_mode = QLabel("–")
         self.lbl_mode.setFont(QFont("Courier New", 11, QFont.Weight.Bold))
         mode_row.addWidget(self.lbl_mode)
@@ -278,7 +278,7 @@ class SignalScreen(QWidget):
         result_layout.addWidget(sep)
 
         ok_row = QHBoxLayout()
-        self.btn_ok = QPushButton("OK  –  In erkannte Betriebsart wechseln")
+        self.btn_ok = QPushButton("OK  –  Switch to the detected mode")
         self.btn_ok.setFixedHeight(36)
         self.btn_ok.setEnabled(False)   # erst nach Analyse aktivieren
         self.btn_ok.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -305,7 +305,7 @@ class SignalScreen(QWidget):
         ctrl_row = QHBoxLayout()
         ctrl_row.setSpacing(8)
 
-        self.btn_neue_analyse = QPushButton("▶  Neue Analyse")
+        self.btn_neue_analyse = QPushButton("▶  New Analysis")
         self.btn_neue_analyse.setFixedWidth(140)
         self.btn_neue_analyse.setFixedHeight(34)
         self.btn_neue_analyse.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -320,7 +320,7 @@ class SignalScreen(QWidget):
         self.btn_neue_analyse.clicked.connect(self._on_neue_analyse)
         ctrl_row.addWidget(self.btn_neue_analyse)
 
-        self.btn_abbrechen = QPushButton("■  Abbrechen")
+        self.btn_abbrechen = QPushButton("■  Cancel")
         self.btn_abbrechen.setFixedWidth(120)
         self.btn_abbrechen.setFixedHeight(34)
         self.btn_abbrechen.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -338,7 +338,7 @@ class SignalScreen(QWidget):
         ctrl_row.addWidget(self.btn_abbrechen)
 
         # Status-Label
-        self.lbl_analyse_status = QLabel("Bereit.")
+        self.lbl_analyse_status = QLabel("Ready.")
         self.lbl_analyse_status.setFont(QFont("Segoe UI", 9))
         self.lbl_analyse_status.setStyleSheet("color: #607080;")
         ctrl_row.addWidget(self.lbl_analyse_status)
@@ -349,7 +349,7 @@ class SignalScreen(QWidget):
         add_hline(root)
 
         # --- Analyse-Log (Verlauf) ----------------------------------------
-        log_label = QLabel("Analyse-Verlauf:")
+        log_label = QLabel("Analysis Log:")
         log_label.setFont(QFont("Segoe UI", 9))
         root.addWidget(log_label)
 
@@ -358,8 +358,8 @@ class SignalScreen(QWidget):
         self.rx_log.setFont(QFont("Courier New", 9))
         style_rx_widget(self.rx_log)
         self.rx_log.setPlaceholderText(
-            "Analyse-Ergebnisse erscheinen hier …\n\n"
-            "Beispiel:\n"
+            "Analysis results appear here …\n\n"
+            "Example:\n"
             "14:23:11  0.47: 50 Baud, Baudot, RXREV OFF\n"
             "14:24:05  0.92: 100 Baud, Baudot, RXREV OFF\n"
             "14:25:18  0.15: Unknown"
@@ -394,7 +394,7 @@ class SignalScreen(QWidget):
         self.btn_abbrechen.setEnabled(True)
         self.btn_ok.setEnabled(False)
         self.lbl_analyse_status.setStyleSheet("color: #cc8800; font-weight: bold;")
-        self.lbl_analyse_status.setText("⏳  Analyse läuft …  (ca. 15 Sek.)")
+        self.lbl_analyse_status.setText("⏳  Analysis running …  (approx. 15 s)")
         # Mockup-Demo: nach 3 Sek. ein simuliertes Ergebnis anzeigen
         self._analyse_timer.start()
 
@@ -404,7 +404,7 @@ class SignalScreen(QWidget):
         self.btn_neue_analyse.setEnabled(True)
         self.btn_abbrechen.setEnabled(False)
         self.lbl_analyse_status.setStyleSheet("color: #607080;")
-        self.lbl_analyse_status.setText("Abgebrochen.")
+        self.lbl_analyse_status.setText("Cancelled.")
         self._reset_result()
 
     def _on_analyse_complete_demo(self) -> None:
@@ -448,9 +448,9 @@ class SignalScreen(QWidget):
         can_switch = mode not in ("Unknown", "Noise", "6-Bit")
         self.btn_ok.setEnabled(can_switch)
         if can_switch:
-            self.btn_ok.setText(f"OK  –  Wechsel zu {mode}")
+            self.btn_ok.setText(f"OK  –  Switch to {mode}")
         else:
-            self.btn_ok.setText("OK  –  Modus nicht erkannt (kein Wechsel möglich)")
+            self.btn_ok.setText("OK  –  Mode not recognised (no switch possible)")
 
         # Log-Eintrag
         now = datetime.now(timezone.utc).strftime("%H:%M:%S")
@@ -460,7 +460,7 @@ class SignalScreen(QWidget):
         self.btn_neue_analyse.setEnabled(True)
         self.btn_abbrechen.setEnabled(False)
         self.lbl_analyse_status.setStyleSheet("color: #3a9e3a; font-weight: bold;")
-        self.lbl_analyse_status.setText("✓  Analyse abgeschlossen.")
+        self.lbl_analyse_status.setText("✓  Analysis complete.")
 
     def _reset_result(self) -> None:
         """Leert alle Ergebnis-Felder."""
@@ -474,7 +474,7 @@ class SignalScreen(QWidget):
         self.lbl_rxrev.setText("–")
         self.lbl_raw.setText("–")
         self.btn_ok.setEnabled(False)
-        self.btn_ok.setText("OK  –  In erkannte Betriebsart wechseln")
+        self.btn_ok.setText("OK  –  Switch to the detected mode")
 
     # ------------------------------------------------------------------
     # UTC
