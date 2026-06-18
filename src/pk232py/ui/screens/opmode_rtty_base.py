@@ -43,7 +43,9 @@ from .ui_theme import (
     style_rx_widget, style_tx_widget,
     THEMES,
 )
-from .macro_store import MacroStore, MacroEditDialog, MACRO_COUNT, add_hline
+from .macro_store import (
+    MacroStore, MacroEditDialog, MACRO_COUNT, add_hline, apply_macro_tooltips,
+)
 
 # ---------------------------------------------------------------------------
 # Layout constants (same across all RTTY screens)
@@ -781,6 +783,8 @@ class RttyBaseScreen(QWidget):
             macro_row.addWidget(btn)
             self.macro_buttons.append(btn)
 
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
+
         macro_row.addStretch()
 
         self.btn_clear_tx = QPushButton("Clear TX")
@@ -870,3 +874,4 @@ class RttyBaseScreen(QWidget):
         dlg.exec()
         for i, btn in enumerate(self.macro_buttons):
             btn.setText(self._macro_store.names[i])
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
