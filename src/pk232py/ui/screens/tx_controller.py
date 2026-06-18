@@ -83,6 +83,16 @@ class TxController(QObject):
 
     TX_MAX = 512
 
+    # ── EAS (Morse) echo-pacing ──────────────────────────────────────────
+    # In EAS mode the next char is handed to the TNC only after the previous
+    # one's $2F echo confirms it was keyed on air, so the TNC never buffers
+    # more than _EAS_WINDOW chars ahead. This is what makes Clear TX / RECEIVE
+    # actually stop the transmission — otherwise the whole message piles up in
+    # the TNC's transmit buffer (which RC cannot flush) and resumes on the next
+    # SEND. _EAS_SAFETY_MS is a fallback so a single lost echo cannot lock TX.
+    _EAS_WINDOW    = 1        # max chars in the TNC buffer ahead of echoes
+    _EAS_SAFETY_MS = 4000     # echo-overdue fallback (covers slow WPM)
+
     # ms per character at each Baudot speed (7.5 bits/char ITA-2)
     # Formula: ms/char = 7500 / baud
     BAUD_RATES = {
@@ -102,6 +112,7 @@ class TxController(QObject):
         self._echo_idx: int  = 0      # next arr index to colour on echo
 
         self._tx_queue: list[str] = []
+        self._tnc_inflight = 0       # EAS: chars sent to TNC awaiting $2F echo
         self._tx_timer = QTimer(self)
         self._tx_timer.setSingleShot(True)
         self._tx_timer.timeout.connect(self._send_next_char)
@@ -155,6 +166,16 @@ class TxController(QObject):
         (doc_offset + arr_idx − cycle_start) maps an arr_idx that now lies
         below cycle_start to the correct earlier document position.
         """
+        # Echo-pacing: this physical $2F echo confirms one char we handed to the
+        # TNC has actually been keyed on air — so release the next queued char
+        # now. Done FIRST and independently of the colouring bookkeeping below
+        # (which uses _echo_idx): one $2F byte == one keyed char == one slot
+        # freed in the TNC's transmit buffer.
+        if self._eas_mode:
+            if self._tnc_inflight > 0:
+                self._tnc_inflight -= 1
+            self._pump_eas()
+
         # Leading scan — step over only the marker entries the $2F echo stream
         # genuinely omits, until _echo_idx reaches the entry this echo belongs to:
         #   \x04          an already-fired EOT marker we now pass on a straggler
@@ -253,6 +274,10 @@ class TxController(QObject):
         the new cycle's ACK tracking.
         """
         self._send_active = True
+        # Fresh echo-pacing window for the new cycle. Any stragglers from the
+        # previous cycle are harmless (guarded ≥0) and must not leave inflight
+        # stuck at/above the window, which would stall this cycle's pump.
+        self._tnc_inflight = 0
         # Align _ack_idx with the new cycle start.
         # Without this, late ACKs for the previous cycle's EOT marker
         # arrive with idx=_ack_idx < _cycle_start and are all ignored,
@@ -287,6 +312,9 @@ class TxController(QObject):
         self._tx_timer.stop()
         self._tx_sent_idx -= len(self._tx_queue)
         self._tx_queue.clear()
+        # Drop the echo-pacing window — chars still in flight to the TNC keep
+        # their echoes (harmless), but the new cycle starts from a clean count.
+        self._tnc_inflight = 0
         self._cycle_start = self._tx_sent_idx
         # Clamp _ack_idx to _tx_sent_idx — any outstanding ACKs from the
         # previous cycle (e.g. for the EOT marker) are now irrelevant.
@@ -358,6 +386,7 @@ class TxController(QObject):
         self._send_active = False
         self._tx_timer.stop()
         self._tx_queue.clear()
+        self._tnc_inflight = 0
 
     # ── Properties ───────────────────────────────────────────────────
 
@@ -384,43 +413,52 @@ class TxController(QObject):
     # ── Internal ─────────────────────────────────────────────────────
 
     def _queue_char(self, char: str) -> None:
-        """Add one char to rate-limited TX queue, advance _tx_sent_idx."""
+        """Add one char to the TX queue, advance _tx_sent_idx, kick sending.
+
+        Baud-rate-paced modes (Baudot/ASCII/AMTOR) start the _mspeed_ms timer.
+        EAS/Morse is echo-paced: _pump_eas() emits up to _EAS_WINDOW chars and
+        the rest follow as $2F echoes arrive.
+        """
         self._tx_queue.append(char)
         self._tx_sent_idx += 1
-        if not self._tx_timer.isActive() and len(self._tx_queue) == 1:
+        if self._eas_mode:
+            self._pump_eas()
+        elif not self._tx_timer.isActive() and len(self._tx_queue) == 1:
             self._tx_timer.start(self._mspeed_ms)
 
-    def _send_next_char(self) -> None:
-        """Timer callback — send next char from queue.
+    def _emit_to_tnc(self) -> str:
+        """Pop and dispatch the next queued char. Returns a status string:
 
-        EOT marker (\\x04): not sent to TNC, triggers eot_reached signal.
-        _tx_queue is cleared before emit so on_send_stop sees empty queue
-        and does not subtract from _tx_sent_idx.
+            'sent'  — a real char/space went to the TNC ($2F echo expected;
+                      in EAS mode _tnc_inflight is incremented),
+            'stop'  — a control marker (\\x04 / \\x1b) ended the burst,
+            'empty' — nothing to send.
+
+        Marker semantics are unchanged from the old _send_next_char():
+          \\x04  EOT  — not sent; clears the queue; fires eot_reached now in
+                        Baud-paced modes, defers to on_echo_char() in EAS.
+          \\x1b  [^T:n] timed — not sent; queue kept for on_send_stop rollback.
         """
         if not self._tx_queue or not self._send_active:
-            return
+            return 'empty'
         char = self._tx_queue.pop(0)
         if char == '\x04':
             self._tx_queue.clear()
             self._tx_timer.stop()
             if not self._eas_mode:
-                # Normal mode: the timer paces TX at the real RF rate, so the
-                # EOT marker is reached exactly when the last char has been
-                # sent — fire eot_reached now.
+                # Baud-paced: the timer reaches the marker exactly when the last
+                # char has been sent — fire eot_reached now.
                 self.status_msg.emit("EOT marker reached — switching to RECEIVE")
                 self.eot_reached.emit()
             else:
-                # EAS mode (Morse): the timer is only a 50 ms safety net and
-                # runs far ahead of the WPM-paced $2F echoes. Defer eot_reached
-                # to on_echo_char(), which fires it once the last real char's
-                # echo arrives — so its colouring happens before RC is sent.
-                logger.debug("EAS: EOT marker hit timer, deferring to echo")
-            return
+                # EAS (Morse): on_echo_char() fires eot_reached once the last
+                # real char's echo arrives, so its colouring precedes RC.
+                logger.debug("EAS: EOT marker dequeued, deferring to echo")
+            return 'stop'
         if char.startswith('\x1b'):
-            # [^T:n] timed marker — do NOT send to TNC.
-            # Do NOT clear _tx_queue here — on_send_stop() will roll back
-            # _tx_sent_idx by len(_tx_queue), so the chars after [^T:n]
-            # are correctly re-queued when on_send_start() fires after n sec.
+            # [^T:n] timed marker — do NOT send to TNC, do NOT clear the queue:
+            # on_send_stop() rolls back _tx_sent_idx by len(_tx_queue) so the
+            # chars after [^T:n] are re-queued when SEND resumes after n sec.
             try:
                 n = int(char[1:])
             except ValueError:
@@ -429,7 +467,47 @@ class TxController(QObject):
             self.status_msg.emit(
                 f"[^T:{n}] — switching to RECEIVE, resuming SEND in {n}s")
             self.timed_send_reached.emit(n)
-            return
+            return 'stop'
         self.send_to_tnc.emit(char)
-        if self._tx_queue:
+        if self._eas_mode:
+            self._tnc_inflight += 1
+        return 'sent'
+
+    def _pump_eas(self) -> None:
+        """Emit queued chars up to the echo-pacing window (EAS / Morse).
+
+        Keeps at most _EAS_WINDOW chars in the TNC's transmit buffer ahead of
+        the $2F echoes. Called once per echo (on_echo_char) and whenever a char
+        is queued. While an echo is still pending, the safety timer is (re)armed
+        so a single lost echo degrades to _EAS_SAFETY_MS/char instead of locking
+        TX up; it never overfills the buffer.
+        """
+        if not self._send_active:
+            return
+        while self._tnc_inflight < self._EAS_WINDOW and self._tx_queue:
+            if self._emit_to_tnc() != 'sent':
+                break          # a marker ended the burst (or queue drained)
+        if self._tnc_inflight > 0:
+            self._tx_timer.start(self._EAS_SAFETY_MS)
+        else:
+            self._tx_timer.stop()
+
+    def _send_next_char(self) -> None:
+        """QTimer slot.
+
+        Baud-paced modes: send one char per _mspeed_ms (unchanged behaviour).
+        EAS/Morse: this is the echo-overdue SAFETY net only — normal pacing is
+        driven by $2F echoes in _pump_eas(). Force one char so a lost echo can
+        never lock TX; _tnc_inflight is left untouched, so persistently lost
+        echoes throttle to _EAS_SAFETY_MS/char rather than overfilling.
+        """
+        if self._eas_mode:
+            if self._send_active and self._tx_queue:
+                logger.debug("EAS safety timer: echo overdue, forcing next char")
+                self._emit_to_tnc()
+            if self._tnc_inflight > 0 or self._tx_queue:
+                self._tx_timer.start(self._EAS_SAFETY_MS)
+            return
+        # Baud-rate paced (Baudot / ASCII / AMTOR).
+        if self._emit_to_tnc() == 'sent' and self._tx_queue:
             self._tx_timer.start(self._mspeed_ms)
