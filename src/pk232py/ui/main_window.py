@@ -658,6 +658,23 @@ class MainWindow(QMainWindow):
             if hasattr(screen, "lbl_myaltcal") and amtor_cfg.myaltcal:
                 screen.lbl_myaltcal.setText(amtor_cfg.myaltcal.upper())
 
+        # For Morse: load MSPEED / MWEIGHT / MID from AppConfig into the
+        # SpinBoxes so the screen reflects the saved config, not the
+        # hard-coded widget defaults. blockSignals avoids re-firing the
+        # change handlers (which would re-send to the TNC and re-save config).
+        if name == "CW / Morse":
+            b = self._app_config.baudot
+            for attr, val in (
+                ("sb_mspeed",  b.mspeed),
+                ("sb_mweight", b.mweight),
+                ("sb_mid",     b.mid),
+            ):
+                sb = getattr(screen, attr, None)
+                if sb is not None:
+                    sb.blockSignals(True)
+                    sb.setValue(int(val))
+                    sb.blockSignals(False)
+
         # Focus the TX window of the new screen immediately
         QTimer.singleShot(0, self._focus_active_tx)
 
@@ -2601,6 +2618,10 @@ class MainWindow(QMainWindow):
             if hasattr(mode, "mspeed"):
                 mode.mspeed = value
             self._log_monitor(f"[PARAM] MSPEED → {value} WPM")
+        # Persist outside the send-guard: the user changed the screen, so save
+        # it even with no TNC connected (the screen reloads it on next switch).
+        self._app_config.baudot.mspeed = value
+        self._config_mgr.save()
 
     def _on_morse_mweight_changed(self, value: int) -> None:
         """MWEIGHT spinbox changed — send MW frame (mnemonic MW)."""
@@ -2611,6 +2632,8 @@ class MainWindow(QMainWindow):
             if hasattr(mode, "mweight"):
                 mode.mweight = value
             self._log_monitor(f"[PARAM] MWEIGHT → {value}")
+        self._app_config.baudot.mweight = value
+        self._config_mgr.save()
 
     def _on_morse_mid_changed(self, value: int) -> None:
         """MID spinbox changed — send MI frame (mnemonic MI)."""
@@ -2621,6 +2644,8 @@ class MainWindow(QMainWindow):
             if hasattr(mode, "mid"):
                 mode.mid = value
             self._log_monitor(f"[PARAM] MID → {value} min")
+        self._app_config.baudot.mid = value
+        self._config_mgr.save()
 
     def _on_morse_lock(self) -> None:
         """LOCK button — lock RX speed to current signal (mnemonic LO)."""
@@ -2854,10 +2879,10 @@ class MainWindow(QMainWindow):
             return
         screen.fax_image.append_line(data)
         n = len(screen.fax_image._lines)
-        screen.lbl_lines.setText(f"Zeilen: {n}")
+        screen.lbl_lines.setText(f"Lines: {n}")
         # Update status on first line and periodically
         if n == 1 or n % 50 == 0:
-            screen._set_status("EMPFANG …", "#cc8800")
+            screen._set_status("RECEIVING …", "#cc8800")
         self._log_monitor(f"[FAX] line {n} ({len(data)} bytes)")
 
     def _on_fax_fspeed_changed(self, index: int) -> None:
