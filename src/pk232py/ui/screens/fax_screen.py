@@ -41,7 +41,7 @@ from PyQt6.QtGui import QFont, QPixmap, QImage, QPainter, QColor
 from .opmode_rtty_base import (
     make_toggle_button, add_hline,
     apply_app_style, style_rx_widget,
-    get_theme,
+    get_theme, BTN_W,
 )
 
 
@@ -285,10 +285,10 @@ class FaxScreen(QWidget):
         # --- Info-Zeile --------------------------------------------------
         info_row = QHBoxLayout()
         for text in (
-            "Wetterkarten-Faksimile",
-            "Nur Empfang",
-            "LSB/USB je nach Station",
-            "DCD-LED beobachten",
+            "Weather-chart facsimile",
+            "Receive only",
+            "LSB/USB depending on station",
+            "Watch the DCD LED",
         ):
             lbl = QLabel(text)
             lbl.setFont(QFont("Segoe UI", 9))
@@ -300,7 +300,7 @@ class FaxScreen(QWidget):
         add_hline(root)
 
         # --- Parameter-Box -----------------------------------------------
-        param_box = QGroupBox("FAX-Parameter")
+        param_box = QGroupBox("FAX Parameters")
         param_box.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         param_layout = QHBoxLayout(param_box)
         param_layout.setSpacing(12)
@@ -313,9 +313,9 @@ class FaxScreen(QWidget):
         self.combo_fspeed.setCurrentIndex(2)   # Default: 120 LPM
         self.combo_fspeed.setFixedWidth(200)
         self.combo_fspeed.setToolTip(
-            "Horizontale Scan-Geschwindigkeit.\n"
-            "Wetterkarten: meist 2 LPS (120 LPM)\n"
-            "Fotos/News: meist 1 LPS (60 LPM)"
+            "Horizontal scan rate.\n"
+            "Weather charts: usually 2 LPS (120 LPM)\n"
+            "Photos/news: usually 1 LPS (60 LPM)"
         )
         param_layout.addWidget(self.combo_fspeed)
 
@@ -329,9 +329,9 @@ class FaxScreen(QWidget):
         self.combo_aspect.setCurrentIndex(1)   # default: ASPECT 2, IOC 576
         self.combo_aspect.setFont(QFont("Courier New", 9))
         self.combo_aspect.setToolTip(
-            "ASPECT: Zeilendichte (IOC).\n"
-            "ASPECT 2 / IOC 576 = Standard Wetterkarten (DWD, NOAA).\n"
-            "ASPECT 1 / IOC 288 = Satellitenbilder."
+            "ASPECT: line density (IOC).\n"
+            "ASPECT 2 / IOC 576 = standard weather charts (DWD, NOAA).\n"
+            "ASPECT 1 / IOC 288 = satellite images."
         )
         param_layout.addWidget(self.combo_aspect)
         # Keep sb_aspect as hidden compatibility shim (MainWindow wires it)
@@ -342,8 +342,8 @@ class FaxScreen(QWidget):
         # Toggle-Buttons
         self.btn_faxneg = make_toggle_button("FAXNEG")
         self.btn_faxneg.setToolTip(
-            "FAXNEG ON: Schwarz und Weiß vertauschen.\n"
-            "Nützlich bei Satellitenbildern (hauptsächlich schwarz)."
+            "FAXNEG ON: swap black and white.\n"
+            "Useful for satellite images (mostly black)."
         )
         self.btn_faxneg.toggled.connect(
             lambda checked: self.fax_image.set_faxneg(checked)
@@ -352,8 +352,8 @@ class FaxScreen(QWidget):
 
         self.btn_rxrev = make_toggle_button("RXREV")
         self.btn_rxrev.setToolTip(
-            "RXREV ON: Gesamtes Signal umkehren.\n"
-            "Anders als FAXNEG — betrifft auch Sync-Signale."
+            "RXREV ON: invert the entire signal.\n"
+            "Unlike FAXNEG — also affects the sync signals."
         )
         param_layout.addWidget(self.btn_rxrev)
 
@@ -367,12 +367,12 @@ class FaxScreen(QWidget):
         ctrl_row.setSpacing(8)
 
         # Status
-        self.lbl_status = QLabel("●  BEREIT")
+        self.lbl_status = QLabel("●  READY")
         self.lbl_status.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
         self.lbl_status.setStyleSheet("color: #888888;")
         ctrl_row.addWidget(self.lbl_status)
 
-        self.lbl_lines = QLabel("Zeilen: 0")
+        self.lbl_lines = QLabel("Lines: 0")
         self.lbl_lines.setFont(QFont("Segoe UI", 9))
         ctrl_row.addWidget(self.lbl_lines)
 
@@ -382,7 +382,7 @@ class FaxScreen(QWidget):
         self.btn_demo = QPushButton("▶  Demo")
         self.btn_demo.setFixedWidth(80)
         self.btn_demo.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_demo.setToolTip("Testbild animiert aufbauen (Mockup-Demo)")
+        self.btn_demo.setToolTip("Animate a test image (mockup demo)")
         self.btn_demo.setStyleSheet(
             "QPushButton { background-color: #2a4a6a; color: #88aadd;"
             " border: 1px solid #3a5a7a; border-radius: 4px; padding: 4px; }"
@@ -391,17 +391,17 @@ class FaxScreen(QWidget):
         self.btn_demo.clicked.connect(self._on_demo)
         ctrl_row.addWidget(self.btn_demo)
 
-        self.btn_clear = QPushButton("Löschen")
+        self.btn_clear = QPushButton("Clear")
         self.btn_clear.setFixedWidth(80)
         self.btn_clear.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_clear.setToolTip("Bild löschen und zurücksetzen")
+        self.btn_clear.setToolTip("Clear the image and reset")
         self.btn_clear.clicked.connect(self._on_clear)
         ctrl_row.addWidget(self.btn_clear)
 
-        self.btn_save = QPushButton("💾  Speichern")
+        self.btn_save = QPushButton("💾  Save")
         self.btn_save.setFixedWidth(110)
         self.btn_save.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_save.setToolTip("Bild als PNG-Datei speichern")
+        self.btn_save.setToolTip("Save the image as a PNG file")
         self.btn_save.clicked.connect(self._on_save)
         ctrl_row.addWidget(self.btn_save)
 
@@ -421,7 +421,7 @@ class FaxScreen(QWidget):
         self._zoom_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self._zoom_slider.setFixedWidth(220)
         self._zoom_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._zoom_slider.setToolTip("Horizontaler Zoom: 100% – 300%")
+        self._zoom_slider.setToolTip("Horizontal zoom: 100% – 300%")
         self._zoom_slider.valueChanged.connect(self._on_zoom_changed)
         zoom_row.addWidget(self._zoom_slider)
         self._zoom_label = QLabel("100%")
@@ -432,7 +432,7 @@ class FaxScreen(QWidget):
         zoom_row.addSpacing(20)
 
         # Vertical line height
-        zoom_row.addWidget(QLabel("Zeilenabstand:"))
+        zoom_row.addWidget(QLabel("Line spacing:"))
         self._lh_slider = QSlider(Qt.Orientation.Horizontal)
         self._lh_slider.setRange(1, 4)    # 1–4 px per line
         self._lh_slider.setValue(2)       # default: 2px (standard WEFAX)
@@ -441,8 +441,8 @@ class FaxScreen(QWidget):
         self._lh_slider.setFixedWidth(100)
         self._lh_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._lh_slider.setToolTip(
-            "Zeilenhöhe: 1–4 Pixel pro empfangener Zeile.\n"
-            "2 = Standard WEFAX  ·  1 = komprimiert  ·  4 = gedehnt"
+            "Line height: 1–4 pixels per received line.\n"
+            "2 = standard WEFAX  ·  1 = compressed  ·  4 = stretched"
         )
         self._lh_slider.valueChanged.connect(self._on_lh_changed)
         zoom_row.addWidget(self._lh_slider)
@@ -482,7 +482,7 @@ class FaxScreen(QWidget):
     def _on_clear_image(self) -> None:
         """Clear the received FAX image and reset the line counter."""
         self.fax_image.clear_image()
-        self.lbl_lines.setText("Zeilen: 0")
+        self.lbl_lines.setText("Lines: 0")
 
     # ------------------------------------------------------------------
     # Demo-Modus
@@ -494,13 +494,13 @@ class FaxScreen(QWidget):
             self._demo_timer.stop()
             self._demo_active = False
             self.btn_demo.setText("▶  Demo")
-            self._set_status("BEREIT", "#888888")
+            self._set_status("READY", "#888888")
         else:
             self.fax_image.clear_image()
             self._demo_line  = 0
             self._demo_active = True
             self.btn_demo.setText("■  Stop")
-            self._set_status("EMPFANG …", "#cc8800")
+            self._set_status("RECEIVING …", "#cc8800")
             self._demo_timer.start()
 
     def _on_demo_tick(self) -> None:
@@ -514,13 +514,13 @@ class FaxScreen(QWidget):
         ])
         self.fax_image.append_line(row)
         self._demo_line += 1
-        self.lbl_lines.setText(f"Zeilen: {self._demo_line}")
+        self.lbl_lines.setText(f"Lines: {self._demo_line}")
 
         if self._demo_line >= 400:
             self._demo_timer.stop()
             self._demo_active = False
             self.btn_demo.setText("▶  Demo")
-            self._set_status("FERTIG", "#3a9e3a")
+            self._set_status("DONE", "#3a9e3a")
 
     # ------------------------------------------------------------------
     # Bild-Steuerung
@@ -532,23 +532,23 @@ class FaxScreen(QWidget):
             self._demo_active = False
             self.btn_demo.setText("▶  Demo")
         self.fax_image.clear_image()
-        self.lbl_lines.setText("Zeilen: 0")
-        self._set_status("BEREIT", "#888888")
+        self.lbl_lines.setText("Lines: 0")
+        self._set_status("READY", "#888888")
 
     def _on_save(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "FAX-Bild speichern", "fax_image.png",
-            "PNG-Bild (*.png);;Alle Dateien (*)"
+            self, "Save FAX image", "fax_image.png",
+            "PNG image (*.png);;All files (*)"
         )
         if path:
             ok = self.fax_image.save_as_png(path)
             if ok:
                 QMessageBox.information(
-                    self, "Gespeichert", f"Bild gespeichert:\n{path}"
+                    self, "Saved", f"Image saved:\n{path}"
                 )
             else:
                 QMessageBox.warning(
-                    self, "Fehler", "Kein Bild vorhanden oder Speichern fehlgeschlagen."
+                    self, "Error", "No image present or saving failed."
                 )
 
     # ------------------------------------------------------------------
@@ -575,11 +575,11 @@ class FaxScreen(QWidget):
         self.btn_demo.setEnabled(not active)
         if active:
             self.btn_demo.setToolTip(
-                "Demo nicht verfügbar während TNC verbunden ist."
+                "Demo unavailable while the TNC is connected."
             )
         else:
             self.btn_demo.setToolTip(
-                "Testbild animiert aufbauen (Mockup-Demo)"
+                "Animate a test image (mockup demo)"
             )
 
     def _set_status(self, text: str, color: str) -> None:
