@@ -357,6 +357,21 @@ class FaxScreen(QWidget):
         )
         param_layout.addWidget(self.btn_rxrev)
 
+        # LOCK is a one-shot ACTION (not a toggle): the PK-232 sits in
+        # "FAX STBY RCVE" and emits NOTHING over Host Mode until it starts
+        # printing, i.e. only after it detects a phasing sync. On the bench
+        # (WAV fed in) auto-sync often fails to trigger, so LOCK (mnemonic LO)
+        # forces the TNC to dump pixel data immediately as if a sync had
+        # arrived. Hence a plain QPushButton, not make_toggle_button().
+        self.btn_lock = QPushButton("LOCK")
+        self.btn_lock.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_lock.setToolTip(
+            "Force Receive (LO): TNC sofort auf Bildausgabe zwingen, ohne auf "
+            "Phasing-Sync zu warten. Bild kann horizontal versetzt sein → ggf. "
+            "mit JUSTIFY korrigieren."
+        )
+        param_layout.addWidget(self.btn_lock)
+
         param_layout.addStretch()
         root.addWidget(param_box)
 
