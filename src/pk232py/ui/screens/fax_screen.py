@@ -24,6 +24,7 @@ Nur Empfang — kein TX, keine Macros.
 Standalone-Test: python fax_screen.py
 """
 
+import logging
 import sys
 from datetime import datetime, timezone
 
@@ -43,6 +44,8 @@ from .opmode_rtty_base import (
     apply_app_style, style_rx_widget,
     get_theme, BTN_W,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -100,6 +103,18 @@ class FaxImageWidget(QLabel):
     # display time, so the on-screen pixels become square again.
     PIXEL_ASPECT = 120 / 72   # = 5/3 ≈ 1.6667 (horizontal dpi / vertical dpi)
 
+    # ── Non-destructive smoothing (inverse halftoning) ──────────────────
+    # LERNMODUS: the TNC delivers a 1-bit BILEVEL bitmap — there is no real
+    # grey, only dithered DOT DENSITY. A Gaussian blur over the bilevel image
+    # turns that local dot density into perceptual grey (a crude inverse
+    # halftone), which reads far better as a weather chart. This is a pure
+    # DISPLAY enhancement: the received lines (_lines) and the raw bilevel
+    # buffer (_buf / _qimage) are never modified, so smoothing=0 always
+    # reproduces the exact original.
+    SIGMA_MAX = 2.5            # Gaussian sigma at slider=100 (slider/100 * MAX)
+    _SMOOTH_DEBOUNCE_MS = 200  # max recompute rate while lines keep arriving
+    _SMOOTH_EVERY_LINES = 25   # force a recompute every N lines during receive
+
     def __init__(self, width: int = FAX_IMAGE_WIDTH, parent=None):
         super().__init__(parent)
         self._img_width  = width
@@ -110,6 +125,19 @@ class FaxImageWidget(QLabel):
         # 1 = neutral → pure 120/72 aspect correction (round circle).
         self._line_height: int = 1
         self._qimage = None
+
+        # Smoothing (display-only). 0 = off → pixel-exact raw bilevel.
+        self._smoothing: int = 0
+        self._smoothed = None          # cached smoothed QImage (None = dirty/off)
+        self._smoothed_buf = None      # keep the smoothed buffer alive for QImage
+        self._lines_since_smooth = 0   # for the every-N-lines recompute trigger
+        # Throttle: recompute the (expensive) smoothed image at most every
+        # _SMOOTH_DEBOUNCE_MS while lines stream in, and once more when the
+        # stream rests. In between, the cheap raw buffer is shown.
+        self._smooth_timer = QTimer(self)
+        self._smooth_timer.setSingleShot(True)
+        self._smooth_timer.timeout.connect(self._recompute_smoothed_and_show)
+
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.setMinimumHeight(200)
         self.setSizePolicy(
@@ -125,9 +153,13 @@ class FaxImageWidget(QLabel):
 
     def clear_image(self) -> None:
         """Löscht das aktuelle Bild und setzt Breite auf Standard zurück."""
+        self._smooth_timer.stop()
         self._lines.clear()
         self._img_width = FAX_IMAGE_WIDTH   # reset for next reception
         self._qimage = None
+        self._smoothed = None
+        self._smoothed_buf = None
+        self._lines_since_smooth = 0
         self._render_placeholder()
 
     def append_line(self, pixel_data: bytes) -> None:
@@ -143,13 +175,26 @@ class FaxImageWidget(QLabel):
             # First line: adopt its length as the image width
             self._img_width = len(pixel_data)
         self._lines.append(pixel_data)
-        self._redraw()
+        self._redraw()                      # cheap: raw bilevel, shown at once
+
+        # Smoothing is expensive — never run it per line. Force a recompute
+        # every _SMOOTH_EVERY_LINES, and (re)arm the debounce timer so a final
+        # smooth lands shortly after the stream rests. The raw buffer is shown
+        # in the meantime (set in _redraw).
+        if self._smoothing > 0:
+            self._lines_since_smooth += 1
+            if self._lines_since_smooth >= self._SMOOTH_EVERY_LINES:
+                self._recompute_smoothed_and_show()
+            else:
+                self._smooth_timer.start(self._SMOOTH_DEBOUNCE_MS)
 
     def set_faxneg(self, enabled: bool) -> None:
         """Schaltet Negativ-Darstellung um und zeichnet neu."""
         self._faxneg = enabled
         if self._lines:
-            self._redraw()
+            self._redraw()                  # raw buffer rebuilt post-FAXNEG
+            if self._smoothing > 0:         # user action, not a stream → now
+                self._recompute_smoothed_and_show()
 
     def set_zoom(self, factor: float) -> None:
         """Scale the displayed image by *factor* (1.0 = 100%)."""
@@ -171,24 +216,89 @@ class FaxImageWidget(QLabel):
         if self._qimage is not None:
             self._apply_zoom()
 
-    def _apply_zoom(self) -> None:
-        """Scale the native raster to the display, correcting the pixel aspect.
+    def set_smoothing(self, value: int) -> None:
+        """Set smoothing strength 0..100 (display-only inverse halftoning).
 
+        0  → pixel-exact raw bilevel (the original-preservation guarantee:
+             move the slider back to 0 to get the untouched received image).
+        >0 → Gaussian-blurred + smooth-scaled grey. Recomputed immediately
+             here (a deliberate user action), unlike the throttled live path.
+        """
+        self._smoothing = max(0, min(100, int(value)))
+        self._smooth_timer.stop()
+        self._smoothed = None
+        self._lines_since_smooth = 0
+        if self._qimage is None:
+            return
+        if self._smoothing > 0:
+            self._recompute_smoothed_and_show()
+        else:
+            self._apply_zoom()              # back to the raw bilevel original
+
+    def _recompute_smoothed_and_show(self) -> None:
+        """(Re)build the cached smoothed image from the raw buffer, then show."""
+        self._lines_since_smooth = 0
+        self._smooth_timer.stop()
+        self._compute_smoothed()
+        self._apply_zoom()
+
+    def _compute_smoothed(self) -> None:
+        """Gaussian-blur the POST-FAXNEG bilevel buffer into a grey QImage.
+
+        scipy/numpy are imported lazily (only paid for when smoothing is on);
+        if unavailable we leave _smoothed=None and the raw image is shown.
+        """
+        if self._qimage is None or self._smoothing <= 0 or not self._buf:
+            self._smoothed = None
+            return
+        try:
+            import numpy as np
+            from scipy.ndimage import gaussian_filter
+        except ImportError:
+            logger.warning("FAX smoothing needs numpy+scipy — showing raw image")
+            self._smoothed = None
+            return
+
+        w, n = self._img_width, len(self._lines)
+        arr = np.frombuffer(bytes(self._buf), dtype=np.uint8).reshape(n, w)
+        sigma = (self._smoothing / 100.0) * self.SIGMA_MAX
+        # ANISOTROPIC sigma = (row-axis, col-axis) = (vertical, horizontal).
+        # The native raster is finer horizontally (120 dpi) than vertically
+        # (72 dpi), so equal pixel-blur would over-blur vertically / under-blur
+        # horizontally. Scaling the horizontal sigma by PIXEL_ASPECT (120/72)
+        # blurs both axes equally in PHYSICAL space.
+        blurred = gaussian_filter(
+            arr.astype(np.float32),
+            sigma=(sigma, sigma * self.PIXEL_ASPECT),
+        )
+        out = np.clip(blurred, 0, 255).astype(np.uint8)
+        self._smoothed_buf = out.tobytes()   # keep alive for the QImage below
+        img = QImage(self._smoothed_buf, w, n, w, QImage.Format.Format_Grayscale8)
+        self._smoothed = img.copy()
+
+    def _apply_zoom(self) -> None:
+        """Scale the current source to the display, correcting the pixel aspect.
+
+        Source: the cached SMOOTHED image when smoothing>0 and it is ready,
+        otherwise the raw bilevel _qimage.
         Horizontal: 1 display px per H-dot, times zoom.
         Vertical:   times zoom, times the manual line-height fine-factor, AND
                     times PIXEL_ASPECT (120/72) to undo the non-square raster.
-        SmoothTransformation so the 5/3 vertical stretch interpolates cleanly
-        rather than replicating rows (integer replication would quantise 5/3
-        to 1 or 2 and bring the squashing back).
+        Scaling transform: Fast at smoothing==0 (crisp, pixel-exact original),
+        Smooth at smoothing>0. The PIXEL_ASPECT vertical stretch is active in
+        BOTH cases.
         """
+        if self._qimage is None:
+            return
+        smoothing_on = self._smoothing > 0
+        src = self._smoothed if (smoothing_on and self._smoothed is not None) \
+            else self._qimage
         w = max(1, int(self._img_width * self._zoom))
         h = max(1, round(len(self._lines) * self._zoom
                          * self._line_height * self.PIXEL_ASPECT))
-        scaled = self._qimage.scaled(
-            w, h,
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
+        mode = (Qt.TransformationMode.SmoothTransformation if smoothing_on
+                else Qt.TransformationMode.FastTransformation)
+        scaled = src.scaled(w, h, Qt.AspectRatioMode.IgnoreAspectRatio, mode)
         self.setPixmap(QPixmap.fromImage(scaled))
         self.setFixedSize(max(w, 200), max(h, 200))
 
@@ -221,6 +331,10 @@ class FaxImageWidget(QLabel):
         img = QImage(buf, w, n, w, QImage.Format.Format_Grayscale8)
         self._buf = buf
         self._qimage = img.copy()
+        # Raw raster changed → any cached smoothed image is now stale. Show the
+        # raw buffer immediately; a fresh smooth is scheduled by the caller
+        # (append_line throttled / set_faxneg+set_smoothing immediate).
+        self._smoothed = None
         self._apply_zoom()
 
     def demo_fill(self, n_lines: int = 300) -> None:
@@ -234,9 +348,16 @@ class FaxImageWidget(QLabel):
             ])
             self._lines.append(row)
         self._redraw()
+        if self._smoothing > 0:
+            self._recompute_smoothed_and_show()
 
     def save_as_png(self, path: str) -> bool:
-        """Speichert das aktuelle Bild als PNG."""
+        """Save the CURRENTLY DISPLAYED image as PNG.
+
+        Saves what is on screen: the smoothed version when smoothing>0, the raw
+        bilevel original when smoothing==0. The untouched original is therefore
+        always reproducible by moving the smoothing slider back to 0.
+        """
         if not self._lines:
             return False
         pixmap = self.pixmap()
@@ -491,6 +612,32 @@ class FaxScreen(QWidget):
         self._lh_label.setFixedWidth(36)
         zoom_row.addWidget(self._lh_label)
 
+        zoom_row.addSpacing(20)
+
+        # Smoothing (inverse halftoning) — non-destructive display enhancement.
+        # 0 = off → pixel-exact raw bilevel (original always reproducible).
+        zoom_row.addWidget(QLabel("Smoothing:"))
+        self._smooth_slider = QSlider(Qt.Orientation.Horizontal)
+        self._smooth_slider.setRange(0, 100)
+        self._smooth_slider.setValue(0)        # default: off (raw original)
+        self._smooth_slider.setTickInterval(25)
+        self._smooth_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._smooth_slider.setFixedWidth(160)
+        self._smooth_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._smooth_slider.setToolTip(
+            "Smoothing (inverse halftoning): blur the 1-bit dither into "
+            "perceptual grey.\n"
+            "0 = off → pixel-exact received image (original always reproducible "
+            "by returning to 0).\nDisplay-only — the received data is never "
+            "modified."
+        )
+        self._smooth_slider.valueChanged.connect(self._on_smoothing_changed)
+        zoom_row.addWidget(self._smooth_slider)
+        self._smooth_label = QLabel("Off (original)")
+        self._smooth_label.setFont(QFont("Courier New", 9))
+        self._smooth_label.setFixedWidth(90)
+        zoom_row.addWidget(self._smooth_label)
+
         zoom_row.addStretch()
         root.addLayout(zoom_row)
 
@@ -605,6 +752,11 @@ class FaxScreen(QWidget):
         """Line-spacing slider moved — change the vertical fine-stretch factor."""
         self._lh_label.setText(f"{value}×")
         self.fax_image.set_line_height(value)
+
+    def _on_smoothing_changed(self, value: int) -> None:
+        """Smoothing slider moved — set display-only inverse-halftone strength."""
+        self._smooth_label.setText("Off (original)" if value == 0 else f"{value}%")
+        self.fax_image.set_smoothing(value)
 
     def set_receiving(self, active: bool) -> None:
         """Called by MainWindow when FAX mode is activated/deactivated.
