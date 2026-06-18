@@ -43,7 +43,7 @@ from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
     MacroStore, MacroEditDialog, TxInputWidget,
-    make_toggle_button, add_hline, apply_app_style,
+    make_toggle_button, add_hline, apply_app_style, apply_macro_tooltips,
     style_rx_widget, style_tx_widget,
     BTN_W, SPACING, MACRO_COUNT,
 )
@@ -243,7 +243,7 @@ class AmtorScreen(QWidget):
         mode_row.addWidget(self.btn_arq)
 
         mode_row.addWidget(QLabel("Dest:"))
-        self.le_dest = _make_selcal(7, SELCAL_W + 10, "Ziel-SELCAL")
+        self.le_dest = _make_selcal(7, SELCAL_W + 10, "Target SELCAL")
         mode_row.addWidget(self.le_dest)
 
         mode_row.addSpacing(4)
@@ -312,7 +312,7 @@ class AmtorScreen(QWidget):
         self.btn_achg = QPushButton("ACHG")
         self.btn_achg.setFixedWidth(BTN_W)
         self.btn_achg.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_achg.setToolTip("ARQ Link übernehmen (Break-In)")
+        self.btn_achg.setToolTip("Take over the ARQ link (break-in)")
         self.btn_achg.setStyleSheet(
             "QPushButton { background-color: #664422; color: white;"
             " border: 1px solid #553311; border-radius: 4px; padding: 4px; }"
@@ -367,7 +367,7 @@ class AmtorScreen(QWidget):
         self.rx_display = QTextEdit()
         self.rx_display.setReadOnly(True)
         self.rx_display.setFont(QFont("Courier New", 10))
-        self.rx_display.setPlaceholderText("RX – empfangene Zeichen erscheinen hier …")
+        self.rx_display.setPlaceholderText("RX – received characters appear here …")
         style_rx_widget(self.rx_display)
         self.rx_display.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -385,7 +385,7 @@ class AmtorScreen(QWidget):
         self.tx_input = TxInputWidget()
         self.tx_input.setFont(QFont("Courier New", 10))
         self.tx_input.setPlaceholderText(
-            "TX – Eingabe hier …  (ITA-2: nur GROSSBUCHSTABEN)"
+            "TX – type here …  (ITA-2: UPPERCASE only)"
         )
         style_tx_widget(self.tx_input)
         fm = self.tx_input.fontMetrics()
@@ -405,6 +405,8 @@ class AmtorScreen(QWidget):
             btn.setFixedWidth(BTN_W)
             macro_row.addWidget(btn)
             self.macro_buttons.append(btn)
+
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
 
         macro_row.addStretch()
 
@@ -491,6 +493,7 @@ class AmtorScreen(QWidget):
         dlg.exec()
         for i, btn in enumerate(self.macro_buttons):
             btn.setText(self._macro_store.names[i])
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
 
     def _update_utc(self) -> None:
         """Aktualisiert das UTC-Zeit-Label auf die aktuelle Sekunde."""
