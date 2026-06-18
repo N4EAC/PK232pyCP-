@@ -2866,6 +2866,9 @@ class MainWindow(QMainWindow):
                 self._on_fax_faxneg_toggled)
         _rewire(screen.btn_rxrev.toggled,
                 self._on_fax_rxrev_toggled)
+        # LOCK is a one-shot action → wire its clicked signal (not toggled).
+        if hasattr(screen, 'btn_lock'):
+            _rewire(screen.btn_lock.clicked, self._on_fax_lock)
 
     def _on_fax_data_received(self, data: bytes) -> None:
         """Handle FAX pixel data ($3F RX_MONITOR frames).
@@ -2947,6 +2950,21 @@ class MainWindow(QMainWindow):
         frame = build_command(b'RV', b'Y' if checked else b'N')
         self._serial.send_command(frame[2:4], frame[4:-1])
         self._log_monitor(f"[FAX] RXREV → {'ON' if checked else 'OFF'}")
+
+    def _on_fax_lock(self, _checked: bool = False) -> None:
+        """LOCK button clicked — force receive (mnemonic LO).
+
+        One-shot command (no Y/N argument), like Morse LOCK. The PK-232 stays
+        in FAX STBY RCVE and emits no pixel data until it detects a phasing
+        sync; LO makes it start dumping pixels immediately. The image may be
+        horizontally offset — correct with JUSTIFY if needed.
+        """
+        if not self._serial.is_connected or not self._serial.is_host_mode:
+            return
+        from pk232py.comm.frame import build_command
+        frame = build_command(b'LO')
+        self._serial.send_command(frame[2:4], frame[4:-1])
+        self._log_monitor("[FAX] LOCK — force receive (LO)")
 
     # ------------------------------------------------------------------
     # Packet RX/TX handlers
