@@ -160,6 +160,7 @@ class BaudotConfig:
     """BAUDOT / ASCII / CW operating parameters."""
     mspeed:    int   = 20
     mweight:   int   = 10
+    mid:       int   = 0
     code:      int   = 0
     xlength:   int   = 64
     xbaud:     int   = 0
@@ -451,6 +452,7 @@ class ConfigManager:
         b = self.app.baudot
         b.mspeed   = s.getint("mspeed",   b.mspeed)
         b.mweight  = s.getint("mweight",  b.mweight)
+        b.mid      = s.getint("mid",      b.mid)
         b.code     = s.getint("code",     b.code)
         b.xlength  = s.getint("xlength",  b.xlength)
         b.xbaud    = s.getint("xbaud",    b.xbaud)
@@ -508,6 +510,7 @@ class ConfigManager:
         b = self.app.baudot
         self._config["Baudot"] = {
             "mspeed": str(b.mspeed), "mweight": str(b.mweight),
+            "mid": str(b.mid),
             "code": str(b.code), "xlength": str(b.xlength),
             "xbaud": str(b.xbaud), "aab": b.aab,
             "alfrtty": str(b.alfrtty).lower(), "diddle": str(b.diddle).lower(),
