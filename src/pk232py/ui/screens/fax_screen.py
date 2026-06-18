@@ -89,13 +89,26 @@ class FaxImageWidget(QLabel):
     ein Testbild generieren.
     """
 
+    # ── Pixel aspect ratio ──────────────────────────────────────────────
+    # LERNMODUS: the TNC raster is NOT square. ESC L (double-density bit
+    # image) packs 120 dots/inch HORIZONTALLY, whereas ESC A 8 (8/72" line
+    # feed across an 8-pin band) yields only 72 dots/inch VERTICALLY. If we
+    # render one display pixel per dot on both axes (1:1), a physical inch is
+    # 120 px wide but only 72 px tall on screen — the image is squashed
+    # vertically and a circle becomes a wide ("liegende") ellipse. We correct
+    # this by stretching the VERTICAL axis by H_dpi / V_dpi = 120/72 at
+    # display time, so the on-screen pixels become square again.
+    PIXEL_ASPECT = 120 / 72   # = 5/3 ≈ 1.6667 (horizontal dpi / vertical dpi)
+
     def __init__(self, width: int = FAX_IMAGE_WIDTH, parent=None):
         super().__init__(parent)
         self._img_width  = width
         self._lines: list[bytes] = []
         self._faxneg = False
         self._zoom: float = 1.0
-        self._line_height: int = 2   # display pixels per received line
+        # Manual vertical fine-stretch, applied ON TOP of PIXEL_ASPECT.
+        # 1 = neutral → pure 120/72 aspect correction (round circle).
+        self._line_height: int = 1
         self._qimage = None
         self.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
         self.setMinimumHeight(200)
@@ -144,26 +157,37 @@ class FaxImageWidget(QLabel):
         if self._qimage is not None:
             self._apply_zoom()
 
-    def set_line_height(self, px: int) -> None:
-        """Set how many display pixels each received line occupies.
+    def set_line_height(self, factor: int) -> None:
+        """Manual vertical fine-stretch, applied ON TOP of PIXEL_ASPECT.
 
-        px=1: compressed (original, 1 display pixel per data line)
-        px=2: standard  (default, matches typical WEFAX proportions)
-        px=3: expanded
-        px=4: very expanded
+        1 = neutral: pure 120/72 aspect correction (the geometrically correct
+            default — circles come out round).
+        2-4 = extra vertical stretch, if the operator wants taller proportions.
+
+        Only affects display scaling (not the native raster), so a re-scale of
+        the existing QImage is enough — no full _redraw needed.
         """
-        self._line_height = max(1, px)
-        if self._lines:
-            self._redraw()
+        self._line_height = max(1, factor)
+        if self._qimage is not None:
+            self._apply_zoom()
 
     def _apply_zoom(self) -> None:
-        """Apply current zoom to _qimage and update the pixmap."""
+        """Scale the native raster to the display, correcting the pixel aspect.
+
+        Horizontal: 1 display px per H-dot, times zoom.
+        Vertical:   times zoom, times the manual line-height fine-factor, AND
+                    times PIXEL_ASPECT (120/72) to undo the non-square raster.
+        SmoothTransformation so the 5/3 vertical stretch interpolates cleanly
+        rather than replicating rows (integer replication would quantise 5/3
+        to 1 or 2 and bring the squashing back).
+        """
         w = max(1, int(self._img_width * self._zoom))
-        h = max(1, int(len(self._lines) * self._zoom))
+        h = max(1, round(len(self._lines) * self._zoom
+                         * self._line_height * self.PIXEL_ASPECT))
         scaled = self._qimage.scaled(
             w, h,
             Qt.AspectRatioMode.IgnoreAspectRatio,
-            Qt.TransformationMode.FastTransformation,
+            Qt.TransformationMode.SmoothTransformation,
         )
         self.setPixmap(QPixmap.fromImage(scaled))
         self.setFixedSize(max(w, 200), max(h, 200))
@@ -178,23 +202,23 @@ class FaxImageWidget(QLabel):
         n = len(self._lines)
         if n == 0:
             return
-        w  = self._img_width
-        lh = self._line_height
-        h  = n * lh
+        w = self._img_width
 
-        # One received line = lh display pixels (no merging)
-        buf = bytearray(w * h)
+        # Build the QImage at the NATIVE raster: exactly one row per received
+        # line. All vertical scaling (PIXEL_ASPECT × line_height × zoom) is done
+        # later in _apply_zoom via a smooth transform — so NO integer row
+        # replication here (that is what "kein integer-Replikat" means and what
+        # lets the 5/3 aspect come out cleanly).
+        buf = bytearray(w * n)
         for y, line in enumerate(self._lines):
             raw = (line[:w]).ljust(w, b'\x80')
             if self._faxneg:
                 row = bytes(255 - v for v in raw)
             else:
                 row = bytes(raw)
-            offset = y * lh * w
-            for dy in range(lh):
-                buf[offset + dy * w : offset + dy * w + w] = row
+            buf[y * w : y * w + w] = row
 
-        img = QImage(buf, w, h, w, QImage.Format.Format_Grayscale8)
+        img = QImage(buf, w, n, w, QImage.Format.Format_Grayscale8)
         self._buf = buf
         self._qimage = img.copy()
         self._apply_zoom()
@@ -449,19 +473,20 @@ class FaxScreen(QWidget):
         # Vertical line height
         zoom_row.addWidget(QLabel("Line spacing:"))
         self._lh_slider = QSlider(Qt.Orientation.Horizontal)
-        self._lh_slider.setRange(1, 4)    # 1–4 px per line
-        self._lh_slider.setValue(2)       # default: 2px (standard WEFAX)
+        self._lh_slider.setRange(1, 4)    # vertical fine-stretch factor
+        self._lh_slider.setValue(1)       # default: 1 = neutral (aspect-correct)
         self._lh_slider.setTickInterval(1)
         self._lh_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self._lh_slider.setFixedWidth(100)
         self._lh_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._lh_slider.setToolTip(
-            "Line height: 1–4 pixels per received line.\n"
-            "2 = standard WEFAX  ·  1 = compressed  ·  4 = stretched"
+            "Vertical fine-stretch on top of the automatic 120/72 aspect "
+            "correction.\n"
+            "1 = aspect-correct (standard)  ·  2–4 = extra vertical stretch"
         )
         self._lh_slider.valueChanged.connect(self._on_lh_changed)
         zoom_row.addWidget(self._lh_slider)
-        self._lh_label = QLabel("2 px")
+        self._lh_label = QLabel("1×")
         self._lh_label.setFont(QFont("Courier New", 9))
         self._lh_label.setFixedWidth(36)
         zoom_row.addWidget(self._lh_label)
@@ -577,8 +602,8 @@ class FaxScreen(QWidget):
         self.fax_image.set_zoom(factor)
 
     def _on_lh_changed(self, value: int) -> None:
-        """Line height slider moved — change px per received line."""
-        self._lh_label.setText(f"{value} px")
+        """Line-spacing slider moved — change the vertical fine-stretch factor."""
+        self._lh_label.setText(f"{value}×")
         self.fax_image.set_line_height(value)
 
     def set_receiving(self, active: bool) -> None:
