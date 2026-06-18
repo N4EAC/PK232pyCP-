@@ -155,24 +155,20 @@ class TxController(QObject):
         (doc_offset + arr_idx − cycle_start) maps an arr_idx that now lies
         below cycle_start to the correct earlier document position.
         """
-        # Leading scan — step over every _arr entry the $2F echo stream omits,
-        # until _echo_idx reaches the toned character this echo belongs to:
+        # Leading scan — step over only the marker entries the $2F echo stream
+        # genuinely omits, until _echo_idx reaches the entry this echo belongs to:
         #   \x04          an already-fired EOT marker we now pass on a straggler
         #                 echo for a post-[^D] char (skip silently, not in RX).
         #   \x1b…         timed marker — consumed on the SEND side (skip silent).
-        #   ' ' (space)   Morse word gap — the TNC keys a pause, not a tone, so
-        #                 it emits NO echo. Its TX cell is already coloured
-        #                 locally by TxInputWidget; here we only mirror it into
-        #                 the RX window. Without this skip the next real echo
-        #                 would land on the space and desync every later char.
+        # Space is NOT skipped here. Hardware test 2026-06-18 proved the TNC DOES
+        # emit a $2F echo (payload 0x20) for a Morse word gap, so a space owns
+        # its own echo call and is consumed below — skipping it here would make
+        # the next real echo land on the space and desync every later char (the
+        # permanent +1-per-space offset seen after b157209).
         while self._echo_idx < len(self._arr):
             mc = self._arr[self._echo_idx]['char']
             if mc == '\x04' or mc.startswith('\x1b'):
                 self._echo_idx += 1
-                continue
-            if mc == ' ':
-                self._echo_idx += 1
-                self.show_in_rx.emit(' ')
                 continue
             break
 
@@ -185,32 +181,34 @@ class TxController(QObject):
         # anchor — that is exactly the case we must still colour.
         e = self._arr[idx]
         self._echo_idx += 1
-        logger.debug("ECHO colour #%d char=%r", idx, e['char'])
-        self.colour_char.emit(idx, True)
-        display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
-        self.show_in_rx.emit(display)
+        if e['char'] == ' ':
+            # Space: TNC echoes the Morse word gap ($2F 0x20). _echo_idx is
+            # already advanced above — just mirror it into the RX window.
+            # Do NOT emit colour_char: TxInputWidget already coloured this
+            # space immediately on keypress (b157209). Re-colouring would be
+            # harmless visually, but advancing _echo_idx is what keeps sync.
+            logger.debug("ECHO space #%d — idx advanced, no recolour", idx)
+            self.show_in_rx.emit(' ')
+        else:
+            logger.debug("ECHO colour #%d char=%r", idx, e['char'])
+            self.colour_char.emit(idx, True)
+            display = '\n' if e['display'].startswith('<CR/LF>') else e['display']
+            self.show_in_rx.emit(display)
 
-        # EOT look-ahead. Spaces and timed markers between the char just echoed
-        # and a [^D] produce no further echo, so we must advance over them NOW —
-        # otherwise, with a trailing space before [^D], no later echo would ever
-        # arrive to trigger the turnaround and the TNC would stay keyed. Mirror
-        # skipped spaces to RX; stop AT the \x04 (do not consume it, so a later
+        # EOT look-ahead. Timed markers (\x1b…) produce no echo, so advance over
+        # them NOW to expose a following \x04. Spaces, however, ARE echoed — each
+        # gets its own echo call — so a trailing space before [^D] is NOT skipped
+        # here; its own echo will fire the turnaround when it consumes the space
+        # and finds the \x04 next. Stop AT the \x04 (do not consume it, so a later
         # post-[^D] straggler echo can still step over it in the leading scan).
-        while self._echo_idx < len(self._arr):
-            mc = self._arr[self._echo_idx]['char']
-            if mc.startswith('\x1b'):
-                self._echo_idx += 1
-                continue
-            if mc == ' ':
-                self._echo_idx += 1
-                self.show_in_rx.emit(' ')
-                continue
-            break
-        # EOT trigger: if the next entry is the EOT marker, the char we just
-        # echoed was the last real character before [^D] — fire eot_reached now
-        # so RC is sent to the TNC only after it has finished keying that char.
-        # Monotonic _echo_idx guarantees this fires exactly once per marker.
-        # on_echo_char() runs in EAS mode only.
+        while (self._echo_idx < len(self._arr) and
+               self._arr[self._echo_idx]['char'].startswith('\x1b')):
+            self._echo_idx += 1
+        # EOT trigger: if the next entry is the EOT marker, the entry just echoed
+        # (real char or word-gap space) was the last one before [^D] — fire
+        # eot_reached now so RC is sent to the TNC only after it has finished
+        # keying that entry. Monotonic _echo_idx guarantees this fires exactly
+        # once per marker. on_echo_char() runs in EAS mode only.
         if self._echo_idx < len(self._arr) and self._arr[self._echo_idx]['char'] == '\x04':
             logger.debug("EAS: last char echoed, EOT next → eot_reached")
             self.status_msg.emit("EOT marker reached — switching to RECEIVE")
