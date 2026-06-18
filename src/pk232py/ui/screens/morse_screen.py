@@ -43,7 +43,7 @@ from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
     MacroStore, MacroEditDialog, TxInputWidget,
-    make_toggle_button, add_hline, apply_app_style,
+    make_toggle_button, add_hline, apply_app_style, apply_macro_tooltips,
     style_rx_widget, style_tx_widget,
     BTN_W, SPACING, MACRO_COUNT,
     STYLE_PROM_INACTIVE, STYLE_SEND_ON, STYLE_SEND_BLINK, STYLE_RECEIVE_ON,
@@ -212,7 +212,7 @@ class MorseScreen(QWidget):
         self.sb_mid = _spinbox(MID_MIN, MID_MAX, 0)
         self.sb_mid.setSuffix(" min")
         self.sb_mid.setFixedWidth(62)
-        self.sb_mid.setSpecialValueText("aus")   # 0 → "aus" anzeigen
+        self.sb_mid.setSpecialValueText("off")   # 0 → show "off"
         param_row.addWidget(self.sb_mid)
         self.btn_mid_up = _small_btn("+")
         param_row.addWidget(self.btn_mid_up)
@@ -267,7 +267,7 @@ class MorseScreen(QWidget):
         self.btn_lock.setFixedWidth(BTN_W)
         self.btn_lock.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.btn_lock.setToolTip(
-            "Empfangsgeschwindigkeit auf aktuelles Signal einrasten (L-Befehl)"
+            "Lock the receive speed to the current signal (L command)"
         )
         toggle_row.addWidget(self.btn_lock)
 
@@ -290,18 +290,18 @@ class MorseScreen(QWidget):
         add_hline(root)
 
         # --- Sonderzeichen-Referenz (kompakte Info-Box) ------------------
-        ref_box = QGroupBox("Sonderzeichen")
+        ref_box = QGroupBox("Special characters")
         ref_box.setFont(QFont("Segoe UI", 8))
         ref_layout = QHBoxLayout(ref_box)
         ref_layout.setSpacing(16)
         ref_layout.setContentsMargins(6, 2, 6, 2)
 
         pairs = [
-            ("*  oder  <", "SK"),
+            ("*  or  <", "SK"),
             ("+",          "AR"),
             ("(",          "KN"),
             ("=",          "BT"),
-            (">  oder  %", "KA"),
+            (">  or  %", "KA"),
             ("&",          "AS"),
             ("!",          "SN"),
         ]
@@ -320,7 +320,7 @@ class MorseScreen(QWidget):
         self.rx_display = QTextEdit()
         self.rx_display.setReadOnly(True)
         self.rx_display.setFont(QFont("Courier New", 10))
-        self.rx_display.setPlaceholderText("RX – dekodierter CW-Text erscheint hier …")
+        self.rx_display.setPlaceholderText("RX – decoded CW text appears here …")
         style_rx_widget(self.rx_display)
         self.rx_display.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
@@ -336,7 +336,7 @@ class MorseScreen(QWidget):
         self.tx_input = TxInputWidget()
         self.tx_input.setFont(QFont("Courier New", 10))
         self.tx_input.setPlaceholderText(
-            "TX – Eingabe hier …  (Sonderzeichen: * = SK,  + = AR,  = = BT)"
+            "TX – type here …  (special chars: * = SK,  + = AR,  = = BT)"
         )
         style_tx_widget(self.tx_input)
         fm = self.tx_input.fontMetrics()
@@ -356,6 +356,8 @@ class MorseScreen(QWidget):
             btn.setFixedWidth(BTN_W)
             macro_row.addWidget(btn)
             self.macro_buttons.append(btn)
+
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
 
         macro_row.addStretch()
 
@@ -429,6 +431,7 @@ class MorseScreen(QWidget):
         dlg.exec()
         for i, btn in enumerate(self.macro_buttons):
             btn.setText(self._macro_store.names[i])
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
 
 
 # ---------------------------------------------------------------------------
