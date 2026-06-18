@@ -43,7 +43,7 @@ from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
     MacroStore, MacroEditDialog,
-    make_toggle_button, add_hline,
+    make_toggle_button, add_hline, apply_macro_tooltips,
     apply_app_style, style_rx_widget, style_tx_widget,
     BTN_W, SPACING, MACRO_COUNT,
     STYLE_PROM_INACTIVE, STYLE_SEND_ON, STYLE_SEND_BLINK, STYLE_RECEIVE_ON,
@@ -409,6 +409,8 @@ class PactorScreen(QWidget):
             macro_row.addWidget(btn)
             self.macro_buttons.append(btn)
 
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
+
         macro_row.addStretch()
 
         self.btn_edit_macros = QPushButton("Edit Macros")
@@ -492,6 +494,7 @@ class PactorScreen(QWidget):
         dlg.exec()
         for i, btn in enumerate(self.macro_buttons):
             btn.setText(self._macro_store.names[i])
+        apply_macro_tooltips(self.macro_buttons, self._macro_store)
 
 
 # ---------------------------------------------------------------------------
