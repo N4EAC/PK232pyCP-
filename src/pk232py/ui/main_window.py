@@ -93,6 +93,10 @@ class MainWindow(QMainWindow):
         self._connect_mode:  str  = "verbose"
         # TX state flag — independent of Qt button states.
         self._send_active: bool = False
+        # FAX reception gate — applies to BOTH auto-sync and LOCK. Set False by
+        # the Stop button to freeze the current image; re-enabled by LOCK or
+        # Clear. When False, _on_fax_data_received() drops incoming rows.
+        self._fax_receiving: bool = True
         # Shared TX/RX content preserved across mode switches.
         self._shared_tx_text: str = ""
         self._shared_rx_doc  = None  # QTextDocument or None
@@ -2869,6 +2873,13 @@ class MainWindow(QMainWindow):
         # LOCK is a one-shot action → wire its clicked signal (not toggled).
         if hasattr(screen, 'btn_lock'):
             _rewire(screen.btn_lock.clicked, self._on_fax_lock)
+        # Stop freezes reception; Clear re-enables it (image cleared by screen).
+        if hasattr(screen, 'btn_stop'):
+            _rewire(screen.btn_stop.clicked, self._on_fax_stop)
+        for _clr in ('btn_clear', 'btn_clear_image'):
+            btn = getattr(screen, _clr, None)
+            if btn is not None:
+                _rewire(btn.clicked, self._on_fax_clear)
 
     def _on_fax_data_received(self, data: bytes) -> None:
         """Handle one decoded FAX image row.
@@ -2879,6 +2890,8 @@ class MainWindow(QMainWindow):
         into these grayscale rows, so this handler stays unchanged. The row is
         forwarded to FaxImageWidget.append_line() which renders it immediately.
         """
+        if not self._fax_receiving:
+            return                       # frozen by Stop — drop incoming rows
         screen = self._opmode_stack.currentWidget()
         if not hasattr(screen, 'fax_image'):
             return
@@ -2928,16 +2941,20 @@ class MainWindow(QMainWindow):
         )
 
     def _on_fax_faxneg_toggled(self, checked: bool) -> None:
-        """FAXNEG button toggled — send FN frame + update image."""
+        """FAXNEG button toggled — pure DISPLAY invert (no TNC command).
+
+        We deliberately do NOT send the FN frame any more. The TNC-side FN
+        invert only affects lines received AFTER it is toggled, so flipping it
+        mid-reception left the already-received top of the image at the old
+        polarity while new lines came inverted — the image showed BANDED
+        polarity, and it fought the display invert applied here. Doing the
+        invert purely in FaxImageWidget makes it uniform and retroactive over
+        the whole image. (The EpsonFaxParser invert flag stays False.)
+        """
         screen = self._opmode_stack.currentWidget()
         if hasattr(screen, 'fax_image'):
             screen.fax_image.set_faxneg(checked)
-        if not self._serial.is_connected or not self._serial.is_host_mode:
-            return
-        from pk232py.modes.fax import FAXMode
-        frame = FAXMode.faxneg_frame(checked)
-        self._serial.send_command(frame[2:4], frame[4:-1])
-        self._log_monitor(f"[FAX] FAXNEG → {'ON' if checked else 'OFF'}")
+        self._log_monitor(f"[FAX] FAXNEG (display) → {'ON' if checked else 'OFF'}")
 
     def _on_fax_rxrev_toggled(self, checked: bool) -> None:
         """RXREV button toggled — send RX frame to TNC.
@@ -2961,12 +2978,44 @@ class MainWindow(QMainWindow):
         sync; LO makes it start dumping pixels immediately. The image may be
         horizontally offset — correct with JUSTIFY if needed.
         """
+        # Re-enable reception and start a fresh image: reset the parser so a
+        # half-finished ESC L block from before the stop can't bleed in.
+        self._fax_receiving = True
+        self._reset_fax_parser()
         if not self._serial.is_connected or not self._serial.is_host_mode:
             return
         from pk232py.comm.frame import build_command
         frame = build_command(b'LO')
         self._serial.send_command(frame[2:4], frame[4:-1])
         self._log_monitor("[FAX] LOCK — force receive (LO)")
+
+    def _reset_fax_parser(self) -> None:
+        """Reset the FAXMode Epson parser (same as get_activate_frames()).
+
+        Drops any partially-collected ESC L block so it cannot bleed into the
+        next image after a stop/lock.
+        """
+        mode = self._modes.current_mode
+        if mode is not None and hasattr(mode, '_parser'):
+            mode._parser.reset()
+
+    def _on_fax_stop(self, _checked: bool = False) -> None:
+        """Stop button — freeze the current image and ignore further data.
+
+        Reception (auto-sync AND LOCK) resumes only via LOCK or Clear. The
+        parser is reset so a half-finished block does not bleed into the next
+        image. The image stays on screen for viewing/saving.
+        """
+        self._fax_receiving = False
+        self._reset_fax_parser()
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, '_set_status'):
+            screen._set_status("READY", "#888888")
+        self._log_monitor("[FAX] reception stopped")
+
+    def _on_fax_clear(self, _checked: bool = False) -> None:
+        """Clear button pressed — re-enable reception (image cleared by screen)."""
+        self._fax_receiving = True
 
     # ------------------------------------------------------------------
     # Packet RX/TX handlers
