@@ -1626,25 +1626,76 @@ class MainWindow(QMainWindow):
             else:
                 i += 1
 
-    def _on_clear_tx(self) -> None:
-        """Clear TX window and reset TX state.
+    # Mode → TNC stop command for Clear TX while transmitting.
+    # Only modes with a continuously-keyed TX buffer appear here:
+    #   Baudot / ASCII / CW-Morse → RC  (drop PTT, back to receive)
+    #   AMTOR ARQ / FEC           → AM  (standby + flush TNC TX buffer; NOT R,
+    #                                    which does not flush — see TX §16/§18)
+    # Frame-based modes (HF/VHF Packet — a frame leaves at ETB and cannot be
+    # recalled) and out-of-Host-Mode modes (PACTOR) have no keyed buffer to
+    # flush, so they are deliberately absent: clearing the unsent line locally
+    # IS the correct "Clear TX" for them.
+    _CLEAR_TX_STOP_CMD = {
+        "Baudot RTTY": b'RC',
+        "ASCII RTTY":  b'RC',
+        "CW / Morse":  b'RC',
+        "AMTOR ARQ":   b'AM',
+        "AMTOR FEC":   b'AM',
+    }
 
-        If SEND is currently active, the controller is cleared but
-        _send_active remains True — new keystrokes after Clear will be
-        queued immediately without needing RECEIVE → SEND cycle.
+    def _on_clear_tx(self) -> None:
+        """Clear the TX window AND the full TX buffer (PC-side + TNC).
+
+        The previous version only emptied the PC-side buffer (``_tx_ctrl``)
+        and the screen but left PTT on, so the TNC kept keying the characters
+        it had already received — the operator saw a blank window while the
+        radio still transmitted the old text. Now, if a transmission is
+        active, we first send the mode-appropriate stop command so the TNC
+        aborts and flushes its own transmit buffer, then clear the PC side and
+        drop the UI back to RECEIVE.
+
+        Modes without a continuously-keyed buffer (Packet is frame-based;
+        PACTOR runs outside Host Mode) send no stop command — see
+        ``_CLEAR_TX_STOP_CMD``. AMTOR/Packet/PACTOR commands beyond RC are not
+        yet hardware-verified (Paket 3 / Stop Sending — Testplan T17).
         """
+        from pk232py.comm.frame import build_command
+
         screen = self._opmode_stack.currentWidget()
         tx = getattr(screen, 'tx_input', None)
+        mode = self._modes.current_mode
+        mode_name = mode.name if mode is not None else ""
+
+        # 1. Abort the TNC transmission so already-sent chars stop on air.
+        stop = self._CLEAR_TX_STOP_CMD.get(mode_name)
+        if (self._send_active and stop is not None
+                and self._serial.is_connected and self._serial.is_host_mode):
+            frame = build_command(stop)
+            self._serial.send_command(frame[2:4], frame[4:-1])
+            self._log_monitor(
+                f"[TX] {stop.decode()} — TX aborted, TNC buffer flushed")
+
+        # 2. Empty the PC-side buffer/queue and reset the document anchors.
+        #    _tx_ctrl.clear() resets _arr, _tx_queue, stops the timer and sets
+        #    _send_active=False; we mirror the MainWindow flag to match.
         if tx is not None:
             tx.clear()
             if hasattr(tx, 'set_cycle_anchor'):
                 tx.set_cycle_anchor(0, 0)
-        # Preserve send_active state — clear resets _arr but PTT stays on
-        was_sending = self._send_active
         self._tx_ctrl.clear()
-        if was_sending:
-            # Restore send_active so new chars are queued immediately
-            self._tx_ctrl._send_active = True
+        self._send_active = False
+
+        # 3. Reflect RECEIVE in the UI WITHOUT re-firing the toggle handlers
+        #    (they would send a second RC/AM). blockSignals keeps it visual.
+        if hasattr(screen, 'btn_send') and screen.btn_send.isChecked():
+            screen.btn_send.blockSignals(True)
+            screen.btn_send.setChecked(False)
+            screen.btn_send.blockSignals(False)
+        if hasattr(screen, 'btn_receive') and not screen.btn_receive.isChecked():
+            screen.btn_receive.blockSignals(True)
+            screen.btn_receive.setChecked(True)
+            screen.btn_receive.blockSignals(False)
+
         self._shared_tx_text = ""
         self._log_monitor("[SYS] TX buffer cleared")
 
