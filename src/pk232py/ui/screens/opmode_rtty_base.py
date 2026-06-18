@@ -151,6 +151,12 @@ class TxInputWidget(QTextEdit):
         self._doc_offset  = 0   # doc position of cycle start
         self._cycle_start = 0   # _arr index of cycle start
         self._doc_extra   = 0   # extra doc chars vs _arr entries (e.g. [^D] = 4 doc, 1 arr → +3)
+        # Dynamic edit-protection boundary. _doc_offset only moves at cycle
+        # end (set_cycle_anchor on RECEIVE), so it cannot protect chars sent
+        # WITHIN the current SEND cycle. _sent_boundary advances every time a
+        # char is confirmed sent (colour_at sent=True / immediate space in
+        # SEND), so already-transmitted chars lock as soon as they are sent.
+        self._sent_boundary = 0   # doc position just past the last sent char
 
     def set_cycle_anchor(self, doc_offset: int, cycle_start: int) -> None:
         """Update anchors for colour_at() positioning.
@@ -168,6 +174,10 @@ class TxInputWidget(QTextEdit):
         self._doc_offset  = doc_offset
         self._cycle_start = cycle_start
         self._doc_extra   = 0   # reset for next cycle
+        # Re-anchor the dynamic protection boundary to the new cycle start.
+        # Everything before doc_offset is already transmitted (protected);
+        # the next cycle's chars will advance _sent_boundary as they send.
+        self._sent_boundary = doc_offset
 
     def colour_at(self, arr_idx: int, sent: bool = True) -> None:
         """Colour one character at arr_idx.
@@ -197,6 +207,10 @@ class TxInputWidget(QTextEdit):
             # Inverse yellow — black text on yellow (sent & confirmed)
             f.setForeground(QColor("#000000"))
             f.setBackground(QColor("#ddaa00"))
+            # Lock this just-sent char: advance the edit-protection boundary
+            # so the cursor can no longer be moved back into it mid-SEND.
+            if doc_pos + 1 > self._sent_boundary:
+                self._sent_boundary = doc_pos + 1
         else:
             # Normal unsent: theme TX colour
             t = get_theme()
@@ -206,14 +220,26 @@ class TxInputWidget(QTextEdit):
 
     # ── Edit protection ───────────────────────────────────────────────
 
+    def _edit_boundary(self) -> int:
+        """Doc position of the first editable character.
+
+        Everything before this is protected (already transmitted). The
+        boundary is the cycle-start anchor (_doc_offset) advanced by
+        _sent_boundary, which grows each time a char is confirmed sent. Using
+        the max guards against either one trailing behind the other; in
+        practice _sent_boundary >= _doc_offset always once a cycle starts.
+        """
+        return max(self._doc_offset, self._sent_boundary)
+
     def _selection_touches_protected(self) -> bool:
         """True if cursor or selection overlaps the protected (sent) zone."""
+        boundary = self._edit_boundary()
         c = self.textCursor()
         if not c.hasSelection():
             # Backspace deletes char BEFORE cursor — protect if cursor
-            # is AT or BEFORE _doc_offset (would delete into sent zone)
-            return c.position() <= self._doc_offset
-        return min(c.position(), c.anchor()) < self._doc_offset
+            # is AT or BEFORE the boundary (would delete into sent zone)
+            return c.position() <= boundary
+        return min(c.position(), c.anchor()) < boundary
 
     def _push_cursor_to_boundary(self) -> None:
         """Move cursor to _doc_offset if it drifted into the protected zone.
@@ -233,13 +259,14 @@ class TxInputWidget(QTextEdit):
         they are < _doc_offset; (b) is a defensive guard for that intent.)
         """
         c = self.textCursor()
-        offset_block_start = self.document().findBlock(self._doc_offset).position()
+        boundary = self._edit_boundary()
+        offset_block_start = self.document().findBlock(boundary).position()
         needs_push = (
-            c.position() < self._doc_offset
+            c.position() < boundary
             or c.block().position() < offset_block_start
         )
         if needs_push:
-            c.setPosition(self._doc_offset)
+            c.setPosition(boundary)
             self.setTextCursor(c)
 
     # ── Paste handling ────────────────────────────────────────────────
@@ -411,7 +438,7 @@ class TxInputWidget(QTextEdit):
                 # Move cursor to boundary (first editable position)
                 # and block destructive keys
                 c = self.textCursor()
-                c.setPosition(self._doc_offset)
+                c.setPosition(self._edit_boundary())
                 self.setTextCursor(c)
                 if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
                     return
@@ -524,6 +551,10 @@ class TxInputWidget(QTextEdit):
                 cur2.setCharFormat(f_sent)
                 cur2.setPosition(space_doc_pos + 1)  # restore cursor to end
                 self.setTextCursor(cur2)
+                # Lock the just-sent space too — same boundary advance as
+                # colour_at() does for ACK'd chars (space has no $5F ACK path).
+                if space_doc_pos + 1 > self._sent_boundary:
+                    self._sent_boundary = space_doc_pos + 1
             return
 
         # ── Enter / printable characters ──────────────────────────────
