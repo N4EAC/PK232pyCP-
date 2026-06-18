@@ -517,6 +517,17 @@ class FaxScreen(QWidget):
         )
         param_layout.addWidget(self.btn_lock)
 
+        # Stop is a one-shot ACTION too: freeze the current image and ignore
+        # further incoming data (auto-sync AND LOCK) until LOCK or Clear. Lets
+        # the operator keep / save a finished chart without it scrolling away.
+        self.btn_stop = QPushButton("Stop")
+        self.btn_stop.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_stop.setToolTip(
+            "Stop FAX reception: freeze the current image and ignore further "
+            "data until LOCK or Clear."
+        )
+        param_layout.addWidget(self.btn_stop)
+
         param_layout.addStretch()
         root.addWidget(param_box)
 
