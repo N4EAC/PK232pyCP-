@@ -2871,11 +2871,13 @@ class MainWindow(QMainWindow):
             _rewire(screen.btn_lock.clicked, self._on_fax_lock)
 
     def _on_fax_data_received(self, data: bytes) -> None:
-        """Handle FAX pixel data ($3F RX_MONITOR frames).
+        """Handle one decoded FAX image row.
 
-        Each call delivers one horizontal scan line as raw bytes
-        (grayscale 0=black, 255=white).  The data is forwarded to
-        FaxImageWidget.append_line() which renders it immediately.
+        Each call delivers one finished horizontal scan line as bytes
+        (grayscale 0=black, 255=white). NB: the $3F payload is actually an
+        Epson 9-pin printer-graphics stream — FAXMode's EpsonFaxParser turns it
+        into these grayscale rows, so this handler stays unchanged. The row is
+        forwarded to FaxImageWidget.append_line() which renders it immediately.
         """
         screen = self._opmode_stack.currentWidget()
         if not hasattr(screen, 'fax_image'):
