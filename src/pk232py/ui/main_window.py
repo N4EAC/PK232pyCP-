@@ -1575,11 +1575,13 @@ class MainWindow(QMainWindow):
                 f_eot.setBackground(_QC("#cc4400"))
                 f_eot.setFontWeight(700)
                 tx.setCurrentCharFormat(f_eot)
-                tx.textCursor().insertText('[^D]')
+                cur = tx.textCursor()
+                doc_pos = cur.position()   # position BEFORE inserting [^D]
+                cur.insertText('[^D]')
                 tx.setCurrentCharFormat(f)
                 # [^D] = 4 doc chars, 1 _arr entry → track discrepancy
                 tx._doc_extra = getattr(tx, '_doc_extra', 0) + 3
-                tx.char_typed.emit('\x04', '[^D]')
+                tx.char_typed.emit('\x04', '[^D]', doc_pos)
                 i += 4
             elif text[i:i+4] == '[^T:':
                 # Timed marker [^T:n] — read digits up to ']'
@@ -1600,28 +1602,35 @@ class MainWindow(QMainWindow):
                     f_tmr.setBackground(_QC("#8800cc"))
                     f_tmr.setFontWeight(700)
                     tx.setCurrentCharFormat(f_tmr)
-                    tx.textCursor().insertText(marker)
+                    cur = tx.textCursor()
+                    doc_pos = cur.position()   # position BEFORE inserting marker
+                    cur.insertText(marker)
                     tx.setCurrentCharFormat(f)
                     tx._doc_extra = getattr(tx, '_doc_extra', 0) + (marker_len - 1)
-                    tx.char_typed.emit(f'\x1b{n_val}', marker)
+                    tx.char_typed.emit(f'\x1b{n_val}', marker, doc_pos)
                     i = j + 1
                 else:
                     # Malformed — insert as plain text
                     tx.setCurrentCharFormat(f)
-                    tx.textCursor().insertText(text[i])
-                    tx.char_typed.emit(text[i], text[i])
+                    cur = tx.textCursor()
+                    doc_pos = cur.position()
+                    cur.insertText(text[i])
+                    tx.char_typed.emit(text[i], text[i], doc_pos)
                     i += 1
             elif text[i] == '\n':
                 tx.setCurrentCharFormat(f)
                 c = tx.textCursor()
+                doc_pos = c.position()   # position BEFORE the block break
                 c.insertBlock()
                 tx.setTextCursor(c)
-                tx.char_typed.emit('\r\n', '<CR/LF>\n')
+                tx.char_typed.emit('\r\n', '<CR/LF>\n', doc_pos)
                 i += 1
             elif text[i].isprintable():
                 tx.setCurrentCharFormat(f)
-                tx.textCursor().insertText(text[i])
-                tx.char_typed.emit(text[i], text[i])
+                cur = tx.textCursor()
+                doc_pos = cur.position()   # position BEFORE inserting char
+                cur.insertText(text[i])
+                tx.char_typed.emit(text[i], text[i], doc_pos)
                 i += 1
             else:
                 i += 1

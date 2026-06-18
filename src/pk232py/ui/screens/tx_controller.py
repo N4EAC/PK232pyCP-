@@ -235,7 +235,7 @@ class TxController(QObject):
             self.status_msg.emit("EOT marker reached — switching to RECEIVE")
             self.eot_reached.emit()
 
-    def on_char_typed(self, char: str, display: str) -> None:
+    def on_char_typed(self, char: str, display: str, doc_pos: int = -1) -> None:
         """Called on every keystroke — regardless of SEND/RECEIVE state.
 
         Special sentinel:
@@ -245,6 +245,13 @@ class TxController(QObject):
 
         Always appends to _arr for normal chars.
         Only queues for sending if SEND is currently active.
+
+        doc_pos (Lösung A, Phase 1): the absolute document position where this
+        char was inserted, captured by TxInputWidget BEFORE the insert. Stored
+        in the _arr entry for the upcoming switch of colour_at() to absolute
+        positions. In Phase 1 it is ONLY stored + verified by logging; the old
+        colour_at formula keeps colouring unchanged. Default -1 = "not given"
+        (the '\\x08' backspace sentinel and any legacy 2-arg caller).
         """
         if char == '\x08':
             # Only remove chars beyond _tx_sent_idx (not yet sent to TNC)
@@ -259,7 +266,39 @@ class TxController(QObject):
         if (len(self._arr) - self._tx_sent_idx) >= self.TX_MAX:
             self.warning.emit("BUFFER_FULL")
             return
-        self._arr.append({'char': char, 'display': display, 'sent': False})
+        self._arr.append({'char': char, 'display': display, 'sent': False,
+                          'doc_pos': doc_pos})
+
+        # ── Phase 1 verification (read-only; colouring stays on old formula) ──
+        # Check the captured absolute doc_pos against the position implied by
+        # the PREVIOUS entry plus its VISIBLE document width. Consecutive
+        # in-order typing must satisfy: captured == prev_doc_pos + prev_width.
+        # A MISMATCH therefore flags a capture error or an unexpected width —
+        # in particular the E5 cases: CR/LF (block break = 1 doc char, though
+        # its display string is '<CR/LF>\n') and multi-char markers [^D]
+        # (4) / [^T:n] (len). NOTE: this is a self-consistency check, NOT the
+        # widget colour_at formula — the controller has no _doc_offset
+        # (a TxInputWidget field), and the real formula has no _doc_extra term.
+        # The cycle-2 "captured vs old formula" drift is a colour-time/widget
+        # effect; here we instead PROVE capture is correct (it stays OK across a
+        # SEND→RECEIVE→SEND boundary, which means the old formula is the wrong
+        # one). See the Phase-1 report.
+        arr_idx = len(self._arr) - 1
+        if arr_idx > 0:
+            prev = self._arr[arr_idx - 1]
+            prev_pos = prev.get('doc_pos', -1)
+            if prev_pos >= 0 and doc_pos >= 0:
+                pd = prev.get('display', '')
+                width = 1 if pd.startswith('<CR/LF>') else len(pd)
+                expected = prev_pos + width
+                match = "OK" if doc_pos == expected else "MISMATCH"
+                logger.debug(
+                    "DOCPOS char=%r arr_idx=%d captured=%d expected(prev+width)=%d [%s]",
+                    char, arr_idx, doc_pos, expected, match)
+        else:
+            logger.debug("DOCPOS char=%r arr_idx=0 captured=%d [first]",
+                         char, doc_pos)
+
         if self._send_active:
             self._queue_char(char)
 

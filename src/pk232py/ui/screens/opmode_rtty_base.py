@@ -144,7 +144,7 @@ class TxInputWidget(QTextEdit):
 
     # Emitted on every printable keystroke and paste.
     # Connected by MainWindow to TxController.on_char_typed().
-    char_typed = pyqtSignal(str, str)   # (char, display)
+    char_typed = pyqtSignal(str, str, int)   # (char, display, doc_pos)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -335,13 +335,16 @@ class TxInputWidget(QTextEdit):
             if ch == '\n':
                 self.setCurrentCharFormat(f)
                 c = self.textCursor()
+                doc_pos = c.position()   # position BEFORE the block break
                 c.insertBlock()
                 self.setTextCursor(c)
-                self.char_typed.emit('\r\n', '<CR/LF>\n')
+                self.char_typed.emit('\r\n', '<CR/LF>\n', doc_pos)
             else:
                 self.setCurrentCharFormat(f)
-                self.textCursor().insertText(ch)
-                self.char_typed.emit(ch, ch)
+                cur = self.textCursor()
+                doc_pos = cur.position()   # position BEFORE inserting ch
+                cur.insertText(ch)
+                self.char_typed.emit(ch, ch, doc_pos)
 
     # ── Keystroke handling ────────────────────────────────────────────
 
@@ -395,7 +398,7 @@ class TxInputWidget(QTextEdit):
             self._eot_positions.append({'pos': eot_doc_pos, 'len': 4})
             # [^D] = 4 doc chars but 1 _arr entry → 3 extra doc positions
             self._doc_extra += 3
-            self.char_typed.emit("\x04", "[^D]")
+            self.char_typed.emit("\x04", "[^D]", eot_doc_pos)
             return
 
         # CTRL+T: open n-dialog, insert [^T:n] timed marker
@@ -427,7 +430,7 @@ class TxInputWidget(QTextEdit):
             # marker_len doc chars but 1 _arr entry → (marker_len-1) extra
             self._doc_extra += marker_len - 1
             # Sentinel: ESC + decimal n  (e.g. "\x1b5" or "\x1b10")
-            self.char_typed.emit(f"\x1b{n}", marker)
+            self.char_typed.emit(f"\x1b{n}", marker, tmr_doc_pos)
             return
 
         # ── Any key touching protected zone ───────────────────────────
@@ -486,10 +489,11 @@ class TxInputWidget(QTextEdit):
                 # Restore the extra doc positions for this marker
                 self._doc_extra = max(0, self._doc_extra - (mlen - 1))
                 # Notify controller: BS sentinel — 1 _arr entry removed
-                self.char_typed.emit('\x08', '')
+                # (doc_pos irrelevant for the delete sentinel → -1)
+                self.char_typed.emit('\x08', '', -1)
             else:
                 # Normal backspace — notify controller then delete
-                self.char_typed.emit('\x08', '')
+                self.char_typed.emit('\x08', '', -1)
                 super().keyPressEvent(ev)
                 # Shift marker positions after the deleted char
                 new_list = []
@@ -536,7 +540,7 @@ class TxInputWidget(QTextEdit):
             cur.setCharFormat(f_tx)
             cur.insertText(' ')
             self.setTextCursor(cur)
-            self.char_typed.emit(' ', ' ')
+            self.char_typed.emit(' ', ' ', space_doc_pos)
 
             if send_active:
                 # Immediately colour as sent (inverse yellow).
@@ -558,14 +562,18 @@ class TxInputWidget(QTextEdit):
             return
 
         # ── Enter / printable characters ──────────────────────────────
+        # doc_pos = cursor position BEFORE the insert (where the char lands).
+        # Must be read before super().keyPressEvent(), which advances the cursor.
         if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             self.setCurrentCharFormat(f_normal)
+            doc_pos = self.textCursor().position()
             super().keyPressEvent(ev)
-            self.char_typed.emit('\r\n', '<CR/LF>\n')
+            self.char_typed.emit('\r\n', '<CR/LF>\n', doc_pos)
         elif text and text.isprintable():
             self.setCurrentCharFormat(f_normal)
+            doc_pos = self.textCursor().position()
             super().keyPressEvent(ev)
-            self.char_typed.emit(text, text)
+            self.char_typed.emit(text, text, doc_pos)
         else:
             super().keyPressEvent(ev)
 
