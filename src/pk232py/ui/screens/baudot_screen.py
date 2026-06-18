@@ -48,6 +48,24 @@ class BaudotScreen(RttyBaseScreen):
         self.btn_6bit     = make_toggle_button("6Bit")
         self.btn_eas      = make_toggle_button("EAS")
 
+        self.btn_figs.setToolTip(
+            "Switch the TNC to the FIGS set (digits / symbols). "
+            "Sent immediately, independent of SEND/RECEIVE."
+        )
+        self.btn_chars.setToolTip(
+            "Switch the TNC back to the LTRS set (letters). Sent immediately."
+        )
+        self.btn_wideshft.setToolTip(
+            "Toggle 850 Hz wide shift vs. 170 Hz narrow — match the other station."
+        )
+        self.btn_rxrev.setToolTip("Reverse RX mark/space polarity (decode an inverted signal).")
+        self.btn_txrev.setToolTip("Reverse TX mark/space polarity.")
+        self.btn_5bit.setToolTip("5-bit ITA-2 character length (standard Baudot RTTY).")
+        self.btn_6bit.setToolTip("6-bit character length (extended / special use).")
+        self.btn_eas.setToolTip(
+            "Echo As Sent — colour TX characters at the moment the TNC keys them on air."
+        )
+
         for b in (
             self.btn_wideshft,
             self.btn_rxrev,
