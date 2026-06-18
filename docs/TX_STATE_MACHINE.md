@@ -5,7 +5,7 @@ AMTOR ARQ/FEC. See §18 for AMTOR-specific behaviour.
 **Implementation:** `TxController` in `src/pk232py/ui/screens/tx_controller.py`
 (renamed from `BaudotTxController` / `baudot_tx_controller.py` in Paket 1, cc2adff)
 **TxInputWidget** in `src/pk232py/ui/screens/opmode_rtty_base.py`
-**Last updated:** 2026-06-16 (v16 — Paket 2a Morse, Paket 2b AMTOR)
+**Last updated:** 2026-06-18 (v16 — edit-protection dynamic sent boundary, §7.1)
 
 ---
 
@@ -202,7 +202,141 @@ def set_cycle_anchor(self, doc_offset: int, cycle_start: int) -> None:
     self._doc_offset  = doc_offset   # actual doc position, not array index
     self._cycle_start = cycle_start
     self._doc_extra   = 0   # reset for next cycle
+    self._sent_boundary = doc_offset # re-anchor edit-protection (see §7.1)
 ```
+
+### 7.1 Edit protection — dynamic sent boundary (fixed 2026-06-18)
+
+**User-facing behaviour (for the manual):**
+
+Text that has already been transmitted to the TNC can no longer be edited.
+The TX window is split into two zones by an invisible boundary:
+
+- **Locked zone** (everything left of the boundary): characters already sent
+  on air, shown black-on-yellow. The cursor cannot enter it, and Backspace,
+  Delete, paste, and typing into it are all blocked. If the cursor is moved
+  into this zone (Left / Home / Up / Page-Up, or a mouse click), it is snapped
+  back to the boundary — the first still-editable position.
+- **Editable zone** (boundary and right of it): characters typed but not yet
+  confirmed sent. The operator may freely type, backspace, and correct here.
+
+The boundary advances **live, character by character, while transmitting** —
+each character locks the instant the TNC confirms it was sent (the per-character
+ACK; in CW/Morse, when its `$2F` echo arrives). The operator therefore can
+*always* keep typing ahead at the end of the buffer, but can *never* go back
+and alter a character that is already on the air. On RECEIVE the whole buffer
+sent so far is locked, and freshly typed text (before the next SEND) is editable
+until it too is transmitted.
+
+**Why this was needed:** previously the boundary (`_doc_offset`) was only
+updated at cycle end (`set_cycle_anchor()`, on RECEIVE). During an active SEND
+it stayed frozen at the previous RECEIVE position, so every character typed
+*and sent within the current SEND cycle* lay to the right of the boundary and
+stayed editable. The operator could move the cursor left into already-sent
+text and insert characters — which were then transmitted out of order
+(TX window showed `abcXXXdef`, RX window the actually-sent `abcdefXXX`).
+The fix makes the boundary advance during the cycle, not only at its end.
+
+**Implementation (`TxInputWidget`, `opmode_rtty_base.py`):**
+
+| Member | Role |
+|--------|------|
+| `_doc_offset` | Static cycle-start anchor — set only at `set_cycle_anchor()` (RECEIVE). |
+| `_sent_boundary` | **Dynamic** doc position just past the last *sent* char. Advances mid-cycle. |
+| `_edit_boundary()` | Returns `max(_doc_offset, _sent_boundary)` — the first editable doc position. All protection checks use this, never `_doc_offset` directly. |
+
+`_sent_boundary` advances in exactly the two places a character becomes "sent":
+
+1. **`colour_at(arr_idx, sent=True)`** — fired per character on DATA_ACK
+   (Baudot/ASCII/AMTOR) or per `$2F` echo in EAS/Morse. After colouring the
+   char black-on-yellow: `_sent_boundary = max(_sent_boundary, doc_pos + 1)`.
+2. **Immediate space colouring in `keyPressEvent`** — a Morse word-gap space is
+   coloured as sent at keypress time (it has no `$5F` ACK path), so the same
+   `_sent_boundary = max(_sent_boundary, space_doc_pos + 1)` advance is applied
+   there too.
+
+`_sent_boundary` is **re-anchored to `_doc_offset`** in `set_cycle_anchor()`
+(start of each new cycle) and reset to 0 by the full `set_cycle_anchor(0, 0)`
+reset on mode switch / Host Mode entry. It only ever grows within a cycle, so
+`max(_doc_offset, _sent_boundary)` collapses to `_sent_boundary` once a cycle
+is running; the `max` is a defensive guard against ordering edge cases.
+
+The three protection sites all consult `_edit_boundary()`:
+`_selection_touches_protected()`, `_push_cursor_to_boundary()` (post-correction
+after every cursor-movement key), and the protected-zone snap in `keyPressEvent`.
+
+> **Gotcha — intentional one-char grace window:** a character is editable from
+> the moment it is typed until its ACK/echo returns. This is deliberate: it
+> keeps end-of-buffer typing fluid. The cursor is *not* force-moved when an ACK
+> advances the boundary past it; the snap happens on the next keystroke or
+> cursor move instead. The net effect the operator sees is: already-on-air text
+> is locked, the live tail is free.
+
+---
+
+## 7.2 Clear TX — full buffer flush (fixed 2026-06-18)
+
+**User-facing behaviour (for the manual):** *Clear TX* empties the entire
+transmit buffer, not just the on-screen text. If a transmission is in progress
+when it is pressed, the radio stops keying immediately — any characters the TNC
+had already buffered are discarded, not sent — and the station returns to
+RECEIVE. (Frame-based Packet: a packet already handed over at Enter/ETB is
+gone and cannot be recalled; Clear TX only discards the unsent line.)
+
+**Why this was needed:** the old handler cleared only the PC-side buffer
+(`_tx_ctrl`) and the screen but left PTT on, so the TNC kept transmitting the
+characters it had already received — the operator saw a blank window while the
+radio still sent the old text.
+
+**Implementation (`MainWindow._on_clear_tx`):**
+
+1. **Stop the TNC** — if `_send_active`, send the mode's stop command from
+   `_CLEAR_TX_STOP_CMD`:
+
+   | Mode | Stop cmd | Note |
+   |------|----------|------|
+   | Baudot / ASCII / CW-Morse | `RC` | Drop PTT, back to receive. |
+   | AMTOR ARQ / FEC | `AM` | Standby + flush TNC TX buffer (NOT `R` — see §16). |
+   | HF / VHF Packet | *(none)* | Frame-based; nothing keyed to flush. |
+   | PACTOR | *(none)* | Runs outside Host Mode; no Host-Mode stop applies. |
+
+2. **Clear PC side** — `tx.clear()`, `set_cycle_anchor(0, 0)` (also resets
+   `_sent_boundary`, §7.1), `_tx_ctrl.clear()`, `_send_active = False`.
+3. **Reflect RECEIVE in the UI** — uncheck `btn_send` / check `btn_receive`
+   under `blockSignals` so the toggle handlers do **not** fire a second RC/AM.
+
+> Replaces the earlier "preserve SEND, keep PTT on" behaviour. Hardware
+> verification for the AMTOR `AM` flush and the Packet/PACTOR no-op is pending
+> (Testplan **T17**, Paket 3 / Stop Sending).
+
+---
+
+## 7.3 doc_pos capture (Phase 1 of Lösung A, commit 5dcaf7e)
+
+**Status:** Phase 1 done (capture). Phase 2 open (switch-over).
+
+**Problem (diagnosis 2026-06-18):** `colour_at()` mixes two coordinate systems
+— `_cycle_start` (an `_arr` index) and `_doc_offset` (a document position). The
+formula `doc_pos = _doc_offset + (arr_idx - _cycle_start)` is only correct while
+`cycle_start` sits at the document end. Echo-pacing leaves typed chars unsent,
+so `_tx_sent_idx` drifts below the document length → after a SEND→RECEIVE→SEND
+turnaround, colouring **and** the `_sent_boundary` (cursor lock) are shifted by
+the unsent gap, and straggler echoes colour the wrong cell.
+
+**Phase 1 (done):** `char_typed` extended to `(str, str, int)` — every `_arr`
+entry stores its **absolute** `doc_pos`, captured by `TxInputWidget` *before*
+the insert, across all insert paths (keypress, paste, CTRL+D/T, space, macro).
+`on_char_typed` stores it and emits a read-only self-consistency log
+(`DOCPOS … [OK/MISMATCH]`: captured vs previous entry + its visible width).
+`colour_at` still runs the old formula — behaviour unchanged.
+**E5 finding (headless + hardware):** a CR/LF block break occupies **1** doc
+position, `[^D]` occupies **4**. Width rule:
+`1 if display.startswith('<CR/LF>') else len(display)`.
+
+**Phase 2 (open):** switch `colour_at`/`colour_char` to the stored `doc_pos`;
+remove `_doc_offset` / `_cycle_start` / `_doc_extra` / `set_cycle_anchor`;
+reduce `_edit_boundary()` to `_sent_boundary`. This fixes the SEND→RECEIVE→SEND
+straggler bug structurally (no more coordinate mixing).
 
 ---
 
@@ -391,11 +525,85 @@ Implementation note (Paket 2b, 8087564): `_on_baudot_eot()` branches for AMTOR
 | Mode | Pacing mechanism | Parameter |
 |------|------------------|-----------|
 | Baudot/ASCII | QTimer → mspeed from config (Baud) | `set_mspeed(baud)` |
-| CW/Morse | ACK-paced; timer = overflow safety net only | `set_mspeed_ms(50)` = `_MORSE_TXCTRL_MS` |
-| AMTOR ARQ/FEC | ACK-paced; 3-character ARQ blocks | `set_mspeed_ms(50)` = `_AMTOR_TXCTRL_MS` |
+| CW/Morse | **Echo-paced** — next char released on the `$2F` echo; ≤ `_EAS_WINDOW` ahead | `_EAS_WINDOW=1`, `_EAS_SAFETY_MS=4000` (see §17.1) |
+| AMTOR ARQ/FEC | Timer-paced; 3-character ARQ blocks | `set_mspeed_ms(50)` = `_AMTOR_TXCTRL_MS` |
 
 `set_mspeed_ms(ms)` (added in Paket 1) takes a direct ms interval for modes
 that have no meaningful Baud rate; `set_mspeed(baud)` only maps Baud → ms.
+For Morse, `set_mspeed_ms(50)` is still called but the value is unused while
+EAS is on — echo-pacing (§17.1) drives the tempo instead.
+
+### 17.1 Morse echo-pacing (fixed 2026-06-18)
+
+**Problem.** The old Morse path fed the TNC one char per `_MORSE_TXCTRL_MS`
+(= 50 ms) — far faster than the TNC keys at the selected WPM. The whole message
+therefore piled up inside the **TNC's own transmit buffer**. `RC` only drops
+PTT; it does **not** flush that buffer, so Clear TX / RECEIVE blanked the screen
+but the leftover characters resumed keying on the next SEND (hardware-confirmed
+2026-06-18).
+
+**Fix.** In EAS mode the controller is **echo-paced**: the next queued char is
+handed to the TNC only after the previous char's `$2F` echo confirms it was
+keyed on air, so the TNC never holds more than `_EAS_WINDOW` (= 1) char ahead.
+RECEIVE/Clear TX then genuinely stop TX (≤ 1 residual char).
+
+| Member | Role |
+|--------|------|
+| `_tnc_inflight` | Chars emitted to the TNC awaiting their `$2F` echo. |
+| `_EAS_WINDOW` (=1) | Max chars allowed in the TNC buffer ahead of echoes. |
+| `_EAS_SAFETY_MS` (=4000) | Lost-echo fallback so TX cannot lock up. |
+
+Flow (`tx_controller.py`):
+- `_emit_to_tnc()` — pops one queued char; real chars → `send_to_tnc` +
+  `_tnc_inflight += 1` **unless `_is_unkeyed(char)`** (the newline — sent but
+  never echoed, see §17.2); markers (`\x04`/`\x1b`) end the burst (unchanged
+  semantics). Returns `'sent'` / `'stop'` / `'empty'`.
+- `_pump_eas()` — emits up to `_EAS_WINDOW` chars, then (re)arms the safety
+  timer while `_tnc_inflight > 0`. Called when chars are queued.
+- `on_echo_char()` — at the top: `_tnc_inflight -= 1` then `_pump_eas()` to
+  release the next char. Decoupled from the colouring bookkeeping (`_echo_idx`)
+  lower in the same method: one `$2F` byte == one keyed char == one freed slot.
+- `_send_next_char()` (the QTimer slot) — in EAS this is **only** the
+  echo-overdue safety net: it force-sends one char without touching
+  `_tnc_inflight`, so persistently lost echoes degrade to `_EAS_SAFETY_MS`/char
+  rather than overfilling. Non-EAS modes keep the original Baud-paced loop.
+
+`_tnc_inflight` is reset to 0 in `on_send_start()`, `on_send_stop()` and
+`clear()`. EAS is enabled only for `"CW / Morse"`
+(`set_eas_mode(mode.name == "CW / Morse")`), so Baudot/ASCII/AMTOR are
+unaffected.
+
+### 17.2 EAS echo stream — the three character classes (hardware-verified 2026-06-18)
+
+In EAS/Morse the characters in the TX stream behave **differently** in the
+TNC's `$2F` echo stream. This table is the authoritative reference — every
+echo-pacing and colouring decision derives from it:
+
+| Class | Examples | Sent to TNC? | Keyed by TNC? | `$2F` echo? | Coloured | `_tnc_inflight` |
+|-------|----------|--------------|---------------|-------------|----------|-----------------|
+| Normal  | A–Z, 0–9, punctuation | yes | yes | **yes** | on echo | +1 |
+| Space   | `0x20` | yes | yes (word gap) | **yes** (`$2F 0x20`) | on keypress (NOT on echo) | +1 |
+| Newline | `\r\n` (`0d 0a`) | yes (2 bytes) | **no** (no symbol) | **no** | in echo scan, as sent | **0** (not counted) |
+| Marker  | `\x04` (EOT), `\x1b…` (timed) | **no** | no | no | EOT logic only | 0 |
+
+**Consequences in `on_echo_char()` / `_emit_to_tnc()`:**
+- **Normal** — `_tnc_inflight += 1` on send; the echo decrements it and colours.
+- **Space** — `_tnc_inflight += 1`, but `colour_char` is **not** emitted on the
+  echo (`TxInputWidget` already coloured the space on keypress, b157209); the
+  echo is only *consumed* to keep `_echo_idx` in sync.
+- **Newline** — `_is_unkeyed(char)` → **not** counted in `_tnc_inflight`. The
+  leading scan (and the EOT look-ahead) in `on_echo_char()` **skip** it: colour
+  it as sent + mirror `'\n'` to RX, but consume **no** echo for it — the current
+  echo belongs to the *next* real char, reached after the `continue`.
+- **Marker** — never sent to the TNC; skipped in the scans (EOT fires its own
+  turnaround logic).
+
+**Why this is subtle:** Space and Newline are both "invisible" characters, yet
+the TNC treats them **oppositely** — a space is a *keyed* word gap (echoed),
+a newline is pure formatting (not echoed). This was only verifiable against the
+real TNC. Wrong assumptions caused, in sequence: a **+1 offset per space**
+(assumed no echo; reality: echo — commit 668c903) and a **4 s stall per char
+after a newline** (assumed echo like space; reality: no echo — commit 5dce1c0).
 
 ---
 

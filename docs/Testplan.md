@@ -98,7 +98,17 @@
 **Status:** ✅ OK (v10b)
 
 ### T17 — Clear TX during SEND
-**Status:** ⬜ OPEN
+**Status:** ⬜ OPEN — code reworked 2026-06-18 (full buffer flush, TX §7.2;
+Morse echo-pacing, TX §17.1).
+Verify on hardware: during SEND, type a long line, press **Clear TX** →
+TNC must stop keying immediately (TX §7.2), window blanks, UI returns to
+RECEIVE. Check per mode: Baudot/ASCII/Morse (`RC`), AMTOR (`AM` flush).
+**Morse regression (the 2026-06-18 finding):** after Clear TX, go RECEIVE →
+SEND again — **no** leftover characters may resume. With echo-pacing (§17.1)
+the TNC holds ≤ 1 char, so at most one stray char is acceptable; a whole
+buffered message resuming = fail. Also confirm Morse still keys smoothly
+(no audible inter-character gaps from `_EAS_WINDOW=1`); if gaps appear, bump
+`_EAS_WINDOW` to 2.
 
 ### T18 — Multi-cycle colour test
 **Status:** ⬜ OPEN
@@ -122,7 +132,9 @@
 - Doppelsenden → `char_ready`-Guard in `_wire_mode_callbacks` prüfen
 - Zeichen nicht gefärbt → `char_typed`-Verbindung zu `TxController` prüfen
 
-**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+**Status:** ✅ PASS (2026-06-18) — EAS-Färbung zeitkorrekt; Space-Echo
+(668c903) und CR/LF-Stall (5dce1c0) behoben. Echo-Strom-Zeichenklassen
+siehe TX_STATE_MACHINE.md §17.2.
 
 ---
 
@@ -140,7 +152,8 @@
 - Schaltet zu früh → `_ack_idx`-zu-`_eot_positions`-Zuordnung in
   `tx_controller.py` prüfen
 
-**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+**Status:** ✅ PASS (2026-06-18) — CTRL+D wartet auf den echo-bestätigten
+letzten Zeichen-Echo, dann RC.
 
 ---
 
@@ -168,7 +181,27 @@
   läuft dem TNC nicht vor
 - Kein BUFFER_FULL-Dialog bei normalem Text
 
-**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+**Status:** ✅ PASS (2026-06-18) — Tempo ausschließlich TNC-gesteuert
+(echo-paced, §17.1); Software-Timer ist nur Sicherheitsnetz.
+
+---
+
+### T80 — Morse CR/LF im SEND: flüssiges Signal durch Zeilenumbruch
+1. SEND aktiv → Text mit Zeilenumbruch tippen (z.B. "test" → **Enter** → "ende")
+2. Morse-Signal und TX-Färbung beobachten
+
+**Expected result:**
+- Signal läuft **flüssig** durch den Zeilenumbruch — KEINE 4-s-Pause pro
+  Folgezeichen (war der Stall-Bug: `\r\n` als echo-erwartend gezählt)
+- Färbung bleibt synchron, kein +1-Versatz nach dem `\r\n`
+- RX-Fenster zeigt den Zeilenumbruch
+- Hintergrund: `\r\n` wird gesendet (2 Bytes `0d 0a`), aber vom TNC NICHT
+  getastet und NICHT mit `$2F` geechot → aus dem Echo-Pacing ausgeschlossen
+  (`_is_unkeyed`), im Echo-Scan übersprungen. Siehe TX_STATE_MACHINE.md §17.2.
+
+**Status:** ✅ PASS (2026-06-18, commit 5dce1c0) — Hardware-verifiziert,
+zusätzlich headless ("te\r\nst": emit t,e,\r\n,s,t; colour 0,1,2,3,4; rx
+t,e,\n,s,t; inflight balanced).
 
 ---
 

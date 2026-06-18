@@ -2,7 +2,7 @@
 
 > This file is the single entry point for Claude Code to understand the
 > PK232PY project. Read it completely before touching any source file.
-> Last updated: 2026-06-16
+> Last updated: 2026-06-18
 
 ---
 
@@ -62,6 +62,12 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
 - Clear TX / Clear RX buttons on all opmode screens (TX-capable: `clear_tx_req`/
   `clear_rx_req` signal pattern wired by `MainWindow`; receive-only Signal/NAVTEX:
   local Clear RX slot; FAX: local "Clear Image" slot)
+- **Clear TX clears the *full* TX buffer, not just the screen** (fixed
+  2026-06-18): if SEND is active it first sends a mode-appropriate stop command
+  (`_CLEAR_TX_STOP_CMD` in `main_window.py`: Baudot/ASCII/Morse → `RC`,
+  AMTOR → `AM`) so the TNC aborts/flushes its own keyed TX buffer, then clears
+  `_tx_ctrl` + screen and drops the UI to RECEIVE. Frame-based Packet and
+  out-of-Host-Mode PACTOR have no keyed buffer → local clear only (no stop cmd).
 - FAX closed-loop test tooling under `tools/` (`fax_wav_generator.py` +
   `fax_decoder_test.py`); decoder is test-only and never shipped
 
@@ -75,7 +81,9 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
 - CTRL+D EOT Paket 2b (AMTOR): implementiert (8087564) — Hardware-Test
   T73–T79 ausstehend (T73 CONNECTED-Text zuerst, braucht zweite Station).
 - CTRL+D EOT Paket 3 (Stop Sending): offen — siehe Backlog.md.
-- Hardware-Test Paket 2a (Morse) T69–T72: ausstehend.
+- Hardware-Test Paket 2a (Morse): T69/T70/T72 ✅ PASS (2026-06-18, inkl.
+  Space-Echo + CR/LF-Stall behoben, neuer T80 CR/LF PASS); T71 (Macro [^D])
+  noch ausstehend.
 - AMTOR TX-Aktivierung: KEIN btn_send / XM-Frame. TxController startet
   wenn `_make_link_handler()` "connected" im Link-Message-Text erkennt
   → `on_send_start()`. CRITICAL: T73 verifiziert, dass der TNC tatsächlich
@@ -283,9 +291,29 @@ no serial I/O, no widget refs. Key learnings from the 2026-06-16 session:
   for which modes are driven by `TxController`. Currently
   `("Baudot RTTY", "ASCII RTTY", "CW / Morse", "AMTOR ARQ", "AMTOR FEC")`
   (Paket 2b / commit 8087564 — AMTOR added 2026-06-16).
-- **Morse** is ACK-paced — the TNC controls WPM. The software timer is only an
-  overflow safety net: `_MORSE_TXCTRL_MS = 50` in `main_window.py`, fed via
-  `set_mspeed_ms()` (direct-ms interval for modes with no meaningful Baud rate).
+- **Morse is echo-paced** (fixed 2026-06-18) — in EAS mode `TxController` hands
+  the TNC the next char only after the previous char's `$2F` echo (= keyed on
+  air), so the TNC never buffers more than `_EAS_WINDOW` (=1) char ahead.
+  *Why:* the old 50 ms timer (`_MORSE_TXCTRL_MS`) dumped the whole message into
+  the TNC far faster than it keyed at WPM; the TNC then piled it up in its own
+  transmit buffer, which `RC` cannot flush — so Clear TX/RECEIVE looked like it
+  worked but the leftover resumed on the next SEND. `_EAS_SAFETY_MS` (=4000) is
+  a lost-echo fallback so TX can never lock up. `_MORSE_TXCTRL_MS = 50` is still
+  passed via `set_mspeed_ms()` but is unused while EAS is on. Echo-pacing lives
+  in `_pump_eas()` / `_emit_to_tnc()` (`tx_controller.py`); non-EAS modes
+  (Baudot/ASCII/AMTOR) stay Baud-rate timer-paced, unchanged.
+- **EAS echo stream has three character classes** (hardware-verified
+  2026-06-18) — Normal and **Space** are keyed and DO send a `$2F` echo (space
+  echoes `$2F 0x20`); **Newline** (`\r\n`) is transmitted but NOT keyed and
+  sends NO echo, so it is excluded from echo-pacing (`_is_unkeyed`) and skipped
+  in `on_echo_char`'s scans (commit 5dce1c0); **Markers** (`\x04`/`\x1b…`) are
+  never sent to the TNC. Wrong assumptions caused a +1-per-space offset
+  (668c903) then a 4 s-per-char newline stall (5dce1c0). Authoritative table:
+  TX_STATE_MACHINE.md §17.2.
+- **Lösung-A migration in progress** (colour_at coordinate-mixing bug): Phase 1
+  — `doc_pos` capture per `_arr` entry — is committed (5dcaf7e); Phase 2 —
+  switching `colour_at` to absolute `doc_pos` and retiring
+  `_doc_offset`/`_cycle_start`/`_doc_extra` — is open. See TX_STATE_MACHINE.md §7.3.
 - **AMTOR EOT ≠ RC** (verified against the Technical Reference Manual):
   AMTOR-ARQ `[^D]` → PTOVER character `\x1A` (Ctrl-Z) sent into the now-empty
   TX stream — polite ISS↔IRS turnaround, link stays up. NOT the `OV` host
