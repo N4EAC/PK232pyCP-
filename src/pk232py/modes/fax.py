@@ -18,7 +18,8 @@ Key characteristics
 Host Mode frame types
 ---------------------
   Incoming:
-    $3F  RX_MONITOR  — FAX pixel/line data
+    $3F  RX_MONITOR  — Epson 9-pin printer-graphics stream (NOT grayscale);
+                       decoded into image rows by EpsonFaxParser
     $5F  STATUS_ERR  — sync lost or other error
 
   Outgoing:
@@ -55,6 +56,148 @@ FSPEED_90  = 90
 FSPEED_120 = 120
 FSPEED_240 = 240
 
+# TNC FSPEED index mapping: RPM value → TNC index (0-4)
+# The TNC expects a single-digit index, NOT the RPM value.
+# FS 0 = 90 LPM, FS 1 = 60 LPM, FS 2 = 120 LPM (standard),
+# FS 3 = 180 LPM, FS 4 = 240 LPM
+FSPEED_RPM_TO_IDX: dict[int, int] = {
+    90:  0,
+    60:  1,
+    120: 2,   # standard WEFAX
+    180: 3,
+    240: 4,
+}
+
+
+# ---------------------------------------------------------------------------
+# Epson 9-pin printer-graphics parser  (the REAL $3F FAX payload)
+# ---------------------------------------------------------------------------
+#
+# LERNMODUS — what the PK-232 actually sends, and why this parser exists
+# ----------------------------------------------------------------------
+# WHAT: in FAX receive the PK-232 does NOT stream 8-bit grayscale scan lines
+# over $3F (RX_MONITOR). It streams an Epson FX-80 / 9-pin dot-matrix PRINTER
+# graphics command stream — literally the bytes it would send to a printer:
+#
+#     ESC 'L' n1 n2   then N = n1 + 256*n2 column bytes  (double-density bit image)
+#     ESC 'A' n       set line spacing to n/72"          (block separator; ignore n)
+#     CR / LF                                             (ignore)
+#
+# Each column byte encodes 8 VERTICAL dots, D7 = top pin. A set bit = a fired
+# dot = BLACK on paper. So one "ESC L" block of N columns is 8 horizontal image
+# rows, N pixels wide. The logged stream "1b 4c c0 03 …" is ESC L with
+# N = 0xC0 + 256*0x03 = 960 columns, then 960 column bytes, blocks separated by
+# "1b 41 08" (ESC A 8).
+#
+# WHY a stateful, frame-overlapping parser: $3F frames are chopped at arbitrary
+# Host-Mode frame boundaries, so an ESC L header — or the N column bytes — can
+# split across two frames. The parser keeps an internal buffer and a
+# length-driven state machine that survives across feed() calls.
+#
+# GOTCHA 1 (the bug this fixes): the old path rendered the raw ESC bytes as a
+# grayscale line, so "1b 4c c0 03 …" became garbage pixels and the line counter
+# was meaningless.
+# GOTCHA 2: 0x1B (ESC) is a perfectly valid DATA byte inside the N-column run.
+# We must NEVER scan for escapes while in DATA — only the length N marks the end
+# of a block. Escapes are recognised in the SCAN state only.
+# GOTCHA 3: D7 is the TOP pin (mask = 1 << (7 - r)); using 1 << r mirrors every
+# 8-row block vertically.
+
+class EpsonFaxParser:
+    """Parse the PK-232's Epson 9-pin printer-graphics $3F stream into 8-bit
+    grayscale image rows. Qt-free and unit-testable.
+
+    Feed each $3F payload (in order) to ``feed()``. For every completed image
+    row the ``on_row`` callback fires once with a ``bytes`` of length N
+    (0 = black, 255 = white). ``invert=True`` swaps the polarity — provided for
+    a future fix; FAXNEG in the widget is left untouched.
+    """
+
+    _SCAN = 0
+    _DATA = 1
+
+    def __init__(
+        self,
+        on_row: Optional[Callable[[bytes], None]] = None,
+        invert: bool = False,
+    ) -> None:
+        self.on_row = on_row
+        self.invert = invert
+        self.reset()
+
+    def reset(self) -> None:
+        """Clear the internal buffer and return to the SCAN state."""
+        self._buf: bytearray = bytearray()
+        self._state: int = self._SCAN
+        self._cols: bytearray = bytearray()   # column bytes of the current block
+        self._need: int = 0                     # N columns expected in this block
+
+    def feed(self, data: bytes) -> None:
+        """Feed one $3F payload chunk; emits rows as blocks complete."""
+        self._buf.extend(data)
+        self._process()
+
+    def _process(self) -> None:
+        buf = self._buf
+        i = 0
+        n = len(buf)
+        while i < n:
+            if self._state == self._DATA:
+                # Pure length-driven collection. NO escape scanning here —
+                # 0x1B is a valid column byte (GOTCHA 2).
+                take = min(self._need - len(self._cols), n - i)
+                self._cols.extend(buf[i:i + take])
+                i += take
+                if len(self._cols) >= self._need:
+                    self._emit_block()
+                    self._cols = bytearray()
+                    self._need = 0
+                    self._state = self._SCAN
+                    continue
+                break   # consumed all we have; wait for the next feed()
+
+            # --- SCAN state ---
+            b = buf[i]
+            if b == 0x1B:                       # ESC
+                if n - i < 2:
+                    break                       # wait for the command byte
+                cmd = buf[i + 1]
+                if cmd == 0x4C:                 # 'L' — bit image, N columns follow
+                    if n - i < 4:
+                        break                   # wait for n1, n2
+                    N = buf[i + 2] + 256 * buf[i + 3]
+                    i += 4
+                    if N == 0:
+                        continue                # empty block — nothing to emit
+                    self._need = N
+                    self._cols = bytearray()
+                    self._state = self._DATA
+                    continue
+                if cmd == 0x41:                 # 'A' — line spacing n/72"; ignore n
+                    if n - i < 3:
+                        break                   # wait for the parameter byte
+                    i += 3
+                    continue
+                logger.debug("EpsonFaxParser: unhandled ESC %#04x — skipping", cmd)
+                i += 2                          # defensive: drop ESC + that byte
+                continue
+            if b in (0x0D, 0x0A):               # CR / LF between blocks — ignore
+                i += 1
+                continue
+            logger.debug("EpsonFaxParser: stray byte %#04x in SCAN — skipping", b)
+            i += 1                              # defensive resync
+        del buf[:i]                             # drop everything consumed this pass
+
+    def _emit_block(self) -> None:
+        """Emit the 8 image rows (top → bottom) of the completed column block."""
+        cols = self._cols
+        set_val, clear_val = (255, 0) if self.invert else (0, 255)
+        for r in range(8):
+            mask = 1 << (7 - r)                 # D7 = top pin (GOTCHA 3)
+            row = bytes(set_val if (c & mask) else clear_val for c in cols)
+            if self.on_row is not None:
+                self.on_row(row)
+
 
 class FAXMode(BaseMode):
     """HF Weather-chart FAX receive mode.
@@ -72,8 +215,7 @@ class FAXMode(BaseMode):
     """
 
     name         = "FAX"
-    host_command = b'FA'
-    verbose_command = b"FAX\r\n"
+    host_command = b'FA'   # Host Mode activation (FA mnemonic)
 
     def __init__(
         self,
@@ -88,7 +230,27 @@ class FAXMode(BaseMode):
 
         self.on_data_received: Optional[Callable[[bytes], None]] = None
 
+        # Decode the Epson 9-pin printer-graphics $3F stream into grayscale
+        # rows. on_row → _emit_row reads self.on_data_received at call time, so
+        # it works even though main_window sets that callback after __init__.
+        self._parser = EpsonFaxParser(on_row=self._emit_row)
+
+    def _emit_row(self, row: bytes) -> None:
+        """Parser callback — forward one finished grayscale row downstream.
+
+        Each row is a ready-to-render bytes() (0 = black, 255 = white), so the
+        host's on_data_received (→ FaxImageWidget.append_line) is unchanged.
+        """
+        if self.on_data_received:
+            self.on_data_received(row)
+
     def get_activate_frames(self) -> list[bytes]:
+        """Return FA frame — switches TNC to FAX receive mode.
+
+        Reset the Epson parser so a new FAX session starts with a clean buffer
+        (no leftover half-block from a previous session).
+        """
+        self._parser.reset()
         return [build_command(b'FA')]
 
     def get_init_frames(self) -> list[bytes]:
@@ -101,9 +263,10 @@ class FAXMode(BaseMode):
     def handle_frame(self, frame: "HostFrame") -> None:
         kind = frame.kind
         if kind == FrameKind.RX_MONITOR:
-            logger.debug("FAX RX %d bytes", len(frame.data))
-            if self.on_data_received:
-                self.on_data_received(frame.data)
+            # $3F carries Epson 9-pin printer graphics, NOT grayscale lines.
+            # Feed the stateful parser; it emits finished rows via _emit_row.
+            logger.debug("FAX RX %d bytes (Epson graphics)", len(frame.data))
+            self._parser.feed(frame.data)
         elif kind == FrameKind.STATUS_ERR:
             logger.warning("FAX status error: %s", frame.data.hex())
         elif kind == FrameKind.CMD_RESP:
@@ -113,12 +276,17 @@ class FAXMode(BaseMode):
 
     @staticmethod
     def fspeed_frame(rpm: int) -> bytes:
-        """FSPEED — drum rotation speed in RPM (mnemonic FS).
+        """FSPEED — drum rotation speed (mnemonic FS).
 
-        Common values: 60, 90, 120, 240 RPM.
-        Standard HF weather FAX uses 120 RPM.
+        The TNC expects the FSPEED INDEX (0-4), not the RPM value.
+        Looks up rpm in FSPEED_RPM_TO_IDX; defaults to index 2
+        (120 LPM) if the rpm value is not found.
+
+        Args:
+            rpm: Drum speed in RPM (60, 90, 120, 180, 240).
         """
-        return build_command(b'FS', str(rpm).encode('ascii'))
+        idx = FSPEED_RPM_TO_IDX.get(rpm, 2)   # default: 120 LPM
+        return build_command(b'FS', str(idx).encode('ascii'))
 
     @staticmethod
     def aspect_frame(value: int) -> bytes:
