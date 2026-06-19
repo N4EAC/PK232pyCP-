@@ -2350,7 +2350,7 @@ class MainWindow(QMainWindow):
     def _on_packet_connect(self, checked: bool) -> None:
         """Connect button toggled — send CO frame to TNC.
 
-        checked=True:  validate Dest field, send CO {callsign} on channel 0.
+        checked=True:  validate Dest field, send CO {callsign} on channel 1.
         checked=False: no TNC command — user uses Disconnect button to DI.
         """
         if not self._serial.is_connected or not self._serial.is_host_mode:
@@ -2373,18 +2373,21 @@ class MainWindow(QMainWindow):
             screen.btn_connect.blockSignals(False)
             screen.on_connect_toggled(False)   # public method on PacketBaseScreen
             return
-        from pk232py.comm.frame import build_ch_cmd
-        frame = build_ch_cmd(1, b'CO', callsign.encode('ascii'))  # ch1 = AX.25 data channel
-        self._serial.send_command(frame[2:4], frame[4:-1])
+        # CONNECT is a CHANNEL command: it must go out with CTL=$41 (ch 1), not
+        # the general-command CTL=$4F. send_command() rebuilds the frame with
+        # CTL=$4F and the channel is lost \u2014 the TNC then treats CO as a plain
+        # command and ignores the connect request. send_channel_command() writes
+        # the $4x channel frame (build_ch_cmd) directly, preserving the channel.
+        self._serial.send_channel_command(1, b'CO', callsign.encode('ascii'))
         self._log_monitor(f"[PACKET] Connecting \u2192 {callsign}")
 
     def _on_packet_disconnect(self) -> None:
         """Disconnect button clicked — send DI frame to TNC."""
         if not self._serial.is_connected or not self._serial.is_host_mode:
             return
-        from pk232py.comm.frame import build_ch_cmd
-        frame = build_ch_cmd(1, b'DI')
-        self._serial.send_command(frame[2:4], frame[4:-1])
+        # DISCONNECT is a channel command too — send the $41 channel frame, not
+        # a $4F general command (see _on_packet_connect).
+        self._serial.send_channel_command(1, b'DI')
         self._log_monitor("[PACKET] Disconnect sent")
         screen = self._opmode_stack.currentWidget()
         if hasattr(screen, "_set_status"):
