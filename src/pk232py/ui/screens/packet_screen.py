@@ -448,12 +448,14 @@ class PacketBaseScreen(QWidget):
         )
         action_row.addWidget(self.btn_connect)
 
-        # Disconnect: one-shot
+        # Disconnect: one-shot. Disabled until a link is up/pending — there is
+        # nothing to disconnect from at startup.
         self.btn_disconnect = _no_focus_btn("Disconnect", BTN_W)
         self.btn_disconnect.setToolTip(
             "Send AX.25 DISCONNECT.\n"
             "TNC mnemonic: DI (disconnect channel)"
         )
+        self.btn_disconnect.setEnabled(False)
         action_row.addWidget(self.btn_disconnect)
 
         # Unproto: checkable
@@ -635,6 +637,34 @@ class PacketBaseScreen(QWidget):
     # ------------------------------------------------------------------
     # Visual-only state updates (TNC commands sent by MainWindow)
     # ------------------------------------------------------------------
+
+    def set_link_state(self, state: str) -> None:
+        """Enable/disable the Connect/Disconnect buttons for an AX.25 link state.
+
+        Called by MainWindow on link transitions so a second CONNECT cannot be
+        sent while a link is up or pending (which would draw an
+        ALREADY_CONNECTED error / undefined behaviour from a real TNC).
+
+        state:
+          'connected' / 'calling' — Connect disabled (no double CO), Disconnect
+              enabled. CALLING keeps Connect pressed-but-disabled so it cannot
+              be un-toggled into a half-aborted state; use Disconnect to abort.
+          anything else (disconnected / idle) — Connect re-enabled and visually
+              released, Disconnect disabled.
+
+        Does NOT touch the status pill (caller owns _set_status) and blocks
+        signals while releasing Connect so it does not re-fire the toggle/CO.
+        """
+        if state.lower() in ("connected", "calling"):
+            self.btn_connect.setEnabled(False)
+            self.btn_disconnect.setEnabled(True)
+        else:
+            self.btn_connect.setEnabled(True)
+            self.btn_connect.blockSignals(True)
+            self.btn_connect.setChecked(False)
+            self.btn_connect.blockSignals(False)
+            self.btn_connect.setStyleSheet(_STYLE_CONNECT_OFF)
+            self.btn_disconnect.setEnabled(False)
 
     def on_connect_toggled(self, checked: bool) -> None:
         """Visual feedback for Connect button toggle.
