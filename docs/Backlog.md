@@ -1,20 +1,25 @@
 # PK232PY — Development Backlog
 
-**Last updated:** 2026-06-16 (v16)
+**Last updated:** 2026-06-19 (v16)
 **Current version:** v0.1 (development)
 
 ---
 
 ## Priority 1 — Next implementation sprint
 
-### Packet — Connect/Disconnect & MHEARD (needs second station)
+### Packet — Connect/Disconnect & MHEARD
 
-- Test T33–T36: Connect flow (CO frame → CONNECTED status pill)
-- Test T37–T39: Disconnect flow, Unproto toggle, mutual exclusion
-- Parse MHEARD response (`MH` frame) into MheardPanel entries (T41–T42)
+- ✅ Connect/Disconnect flow (T33–T37) **software-verified via the mock TNC**
+  (`tools/mock_tnc_bbs.py`) — the mock replaces the second AX.25 station for
+  software tests. Connect/CONNECTED/DATA/Disconnect logic confirmed.
+- **Open:** T38 Unproto with digipeater path
+- **Open:** T39 Connect/Unproto mutual exclusion
+- **Open:** MHEARD response (`MH` frame) → MheardPanel entries (T41–T42)
+- **Open:** T35/T37 hardware re-test: real AX.25 second station (the mock
+  proves the software logic; on-air behaviour still needs a real TNC + station)
 
 *Note: monitoring on 144.800 MHz has replaced most RX-only tests.
-T33–T39 require a second AX.25 station.*
+T38/T39, MHEARD and the T35/T37 hardware re-test still need a real station.*
 
 ### Packet — Remaining toggle/button tests
 
@@ -51,6 +56,12 @@ T33–T39 require a second AX.25 station.*
   resolvable locally; `WEATHER_IMAGE_CANDIDATES` does not match the actual
   file (e.g. `tools/Wetterkarte.jpg`), so it falls back to
   `wetterkarte_decoded.png`. Extend the candidate list.
+
+### Testing tools (dev-only)
+
+- `mock_tnc_bbs.py`: dev-only mock TNC + mini-BBS for Packet connected-mode
+  tests (T33–T37, T83–T84) with no real TNC, radio or second station.
+  Start: `python tools/mock_tnc_bbs.py [--trace]`.
 
 ### TxController — CTRL+D EOT (Status nach Paket 2a/2b)
 
@@ -135,6 +146,32 @@ AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
 
 ### MailDrop
 - TNC mailbox functionality (`maildrop/` directory planned)
+
+---
+
+## Completed (2026-06-19 — Mock-TNC BBS sprint)
+
+| Item | Notes |
+|------|-------|
+| Mock TNC + mini-BBS (`tools/mock_tnc_bbs.py`) | In-process `LoopbackTNC` duck-types serial.Serial via `SerialManager.set_port_factory()`; mini-BBS answers CONNECT/L/R/D. Exercises Packet connected mode (T33–T37, T83–T84) without a TNC, radio or second station. Dev-only, GPL v2. |
+| CO/DI frame CTL bug ($4F instead of $41) | `_on_packet_connect/_disconnect` built the channel frame but sent it via `send_command()` (forces CTL=$4F, channel lost). Now uses `send_channel_command()` → correct $41. Fixed 47f5845. |
+| Connect-button gating (prevent double CO) | `PacketBaseScreen.set_link_state()` + gating in `_make_link_handler`/`_on_packet_connect`: Connect disabled while connected/calling, re-enabled (and released) on disconnect; Disconnect starts disabled. |
+| Packet Connect/Disconnect software tests (T33–T37) | PASS against the mock; T83/T84 added to Testplan. Hardware re-test (real second station) tracked under Priority 1. |
+
+---
+
+## Completed (2026-06-18 — FAX live image decode + TX polish)
+
+| Item | Notes |
+|------|-------|
+| FAX live decode — `EpsonFaxParser` | Length-driven, frame-overlapping parser for the `$3F` Epson 9-pin printer-graphics stream (ESC L bit image + ESC A band separators) → 8-row grayscale bands → `FaxImageWidget`. Hardware-verified (Testplan T82). Unit tests in `src/pk232py/tests/test_epson_fax_parser.py`. |
+| FAX display pixel aspect | `PIXEL_ASPECT = 120/72` vertical stretch (ESC L 120 dpi H / ESC A 8 → 72 dpi V), smooth scaling — fixes the squashed image / oval circle. |
+| FAX smoothing slider | Non-destructive inverse-halftoning (`scipy.ndimage.gaussian_filter`, anisotropic `σ=(σ, σ·PIXEL_ASPECT)`, throttled recompute). Slider 0 = exact raw bilevel preserved. |
+| FAX LOCK button | Force Receive (mnemonic `LO`) + parser reset / `_fax_receiving`. |
+| FAX Stop button | Freeze image + ignore further data + parser reset; LOCK/Clear re-enable. |
+| FAX FAXNEG = display-only invert | No longer sends `FN` to the TNC (TNC-side FN only affected subsequent lines → banded polarity). |
+| `fax_wav_generator.py --target tnc` | Bench WAVs at the PK-232 demod centre (1200/2200 Hz) vs `--target sw` (1500/2300 Hz). |
+| Testplan T81 / T82 | T81 = WAV→TNC bargraph sync; T82 = full live Epson decode (aspect, smoothing, start/stop, polarity). |
 
 ---
 
