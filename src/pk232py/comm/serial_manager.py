@@ -261,10 +261,55 @@ class SerialManager(QObject):
         self._poll_thread      = None
         self._worker           = None  # _HostModeWorker in Host Mode
         self._write_lock       = threading.Lock()
+        # Port factory (generic seam). None → real serial.Serial. A dev tool may
+        # inject a duck-typed stand-in via set_port_factory(); SerialManager
+        # itself knows nothing about any mock.
+        self._port_factory     = None
+        # TNC boot banner — captured during init for capability detection
+        self._tnc_banner: bytes = b""
         # Shared buffer: ReaderThread writes here, _read_raw_until reads here
         self._rx_buf           = bytearray()
         self._rx_buf_lock      = threading.Lock()
         self._rx_buf_event     = threading.Event()
+
+    # ------------------------------------------------------------------
+    # TNC capability detection
+    # ------------------------------------------------------------------
+
+    @property
+    def has_pactor(self) -> bool:
+        """True if the TNC boot banner contains 'PACTOR'.
+
+        The PK-232MBX comes in two variants — with and without the
+        PACTOR hardware/firmware option.  The boot banner reliably
+        identifies which variant is connected.
+
+        Returns True (permissive default) when no banner was captured,
+        e.g. when the TNC was already in Host Mode at connect time.
+        """
+        if not self._tnc_banner:
+            return True   # no banner captured — assume PACTOR capable
+        return b"PACTOR" in self._tnc_banner
+
+    @property
+    def tnc_banner(self) -> str:
+        """TNC boot banner as a decoded string (for logging/display)."""
+        return self._tnc_banner.decode('ascii', errors='replace').strip()
+
+    # ------------------------------------------------------------------
+    # Port factory seam (generic; default = real serial.Serial)
+    # ------------------------------------------------------------------
+
+    def set_port_factory(self, factory) -> None:
+        """Inject the callable used to create the port object.
+
+        The factory is called with the same keyword arguments as
+        ``serial.Serial`` (port, baudrate, bytesize, parity, …) and must return
+        an object that duck-types the serial.Serial methods this manager uses.
+        Default (None) uses the real ``serial.Serial``. This is the single,
+        generic seam a dev-only mock plugs into; production never references it.
+        """
+        self._port_factory = factory
 
     # ------------------------------------------------------------------
     # Port management
@@ -283,7 +328,8 @@ class SerialManager(QObject):
             logger.warning("Port already open")
             return False
         try:
-            self._serial = serial.Serial(
+            factory = self._port_factory or serial.Serial
+            self._serial = factory(
                 port     = port_name,
                 baudrate = baudrate,
                 bytesize = serial.EIGHTBITS,
@@ -441,6 +487,16 @@ class SerialManager(QObject):
 
             if not resp:
                 raise RuntimeError("TNC did not respond — check port and baud")
+
+            # Store banner for capability detection (has_pactor property).
+            # Only store when known banner markers are present.
+            if any(m in resp for m in _BANNER_MARKERS):
+                self._tnc_banner = resp
+                logger.info(
+                    "TNC banner captured: PACTOR=%s (%d bytes)",
+                    b"PACTOR" in resp,
+                    len(resp),
+                )
 
             if _SOH_BYTE in resp:
                 logger.info("TNC already in Host Mode")
@@ -819,23 +875,49 @@ class SerialManager(QObject):
         if not self._write_raw(data):
             return False
         import time as _t
-        local_buf = bytearray()
-        deadline = _t.monotonic() + timeout
-        _t.sleep(0.05)  # give TNC time to start responding
+
+        # Idle-detection: wait until the TNC stops sending data
+        # for _IDLE_S seconds after the 'cmd:' prompt appears.
+        # Simply returning on 'cmd:' causes the next command to
+        # interleave with the TNC's still-running response output.
+        _IDLE_S = 0.12   # 120 ms idle = TNC has finished writing
+
+        local_buf    = bytearray()
+        deadline     = _t.monotonic() + timeout
+        prompt_seen  = False
+        idle_since   = None
+
+        _t.sleep(0.05)   # give TNC time to start responding
+
         while _t.monotonic() < deadline:
             with self._rx_buf_lock:
                 chunk = bytes(self._rx_buf)
                 self._rx_buf.clear()
             self._rx_buf_event.clear()
+
             if chunk:
                 local_buf.extend(chunk)
-                if b'\ncmd:' in local_buf or local_buf.startswith(b'cmd:'):
-                    return True
+                idle_since = None   # new data → reset idle timer
+                if not prompt_seen:
+                    if (b'\ncmd:' in local_buf
+                            or local_buf.startswith(b'cmd:')):
+                        prompt_seen = True
+                        idle_since  = _t.monotonic()
+            else:
+                # No new data — advance idle timer
+                if prompt_seen:
+                    if idle_since is None:
+                        idle_since = _t.monotonic()
+                    elif _t.monotonic() - idle_since >= _IDLE_S:
+                        return True   # prompt + idle → TNC ready
+
             remaining = deadline - _t.monotonic()
             if remaining <= 0:
                 break
-            self._rx_buf_event.wait(timeout=min(0.1, remaining))
-        return False
+            self._rx_buf_event.wait(timeout=min(0.05, remaining))
+
+        # Timeout: return True if prompt was at least seen
+        return prompt_seen
 
     def _read_raw_until(self, markers: tuple, timeout: float) -> bytes:
         """Wait for marker in shared rx buffer (filled by ReaderThread).
