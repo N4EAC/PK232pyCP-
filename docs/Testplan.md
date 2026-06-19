@@ -1,5 +1,5 @@
 # PK232PY — Test Plan
-**Updated: 2026-06-16 (v16) — Paket 2a/2b TxController (Morse + AMTOR), T69–T79; FAX closed-loop T66–T68; clear buttons**
+**Updated: 2026-06-16 (v16) — Paket 2a/2b TxController (Morse + AMTOR), T69–T79; FAX closed-loop T66–T68; clear buttons; +T81 (FAX hardware, WAV→TNC); +T82 (FAX hardware, live Epson decode); +T33–T37 PASS & +T83–T84 (mock-TNC BBS sprint)**
 **Previous stand: 2026-06-16 (v16) — CW/Morse TxController tests T69–T72 (Paket 2a)**
 
 ---
@@ -420,7 +420,8 @@ benötigt für Gegenstation-Abbruch; STBY-Button allein testbar)
 
 **Expected result:** Warning dialog "Packet Connect"
 
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-19, mock)
+**Note:** Warning dialog fires correctly when Dest empty.
 
 ---
 
@@ -432,7 +433,9 @@ benötigt für Gegenstation-Abbruch; STBY-Button allein testbar)
 - Serial: `01 40 01 43 4F ...` (CH_CMD ch=1, CO, callsign bytes)
 - Status: **● CALLING**
 
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-19, mock)
+**Note:** CTL=$41 channel frame confirmed (bugfix 47f5845 — was $4F).
+TX: `01 41 43 4F 4F 45 31 58 59 5A 17`
 
 ---
 
@@ -443,7 +446,9 @@ benötigt für Gegenstation-Abbruch; STBY-Button allein testbar)
 - $50 LINK_MSG frame received
 - Status pill → **● CONNECTED** (green)
 
-**Status:** ⬜ OPEN (needs second station)
+**Status:** ✅ PASS (2026-06-19, mock)
+**Note:** $51 LINK_MSG "CONNECTED to OE1XYZ" → ● CONNECTED (green).
+Hardware test against real second station still outstanding.
 
 ---
 
@@ -454,18 +459,56 @@ benötigt für Gegenstation-Abbruch; STBY-Button allein testbar)
 - Serial: DATA frame on channel 1 with text content
 - Echo appears in RX display (TX yellow)
 
-**Status:** ⬜ OPEN (needs second station)
+**Status:** ✅ PASS (2026-06-19, mock)
+**Note:** L / R 2 / R 4 / D sent and echoed correctly (TX yellow).
+BBS responses appear in RX display.
 
 ---
 
-### T37 — Disconnect: DI frame
+### T37 — Disconnect: DI frame + status pill
 1. VHF Packet, connected → click **Disconnect**
 
 **Expected result:**
 - Serial: `01 40 01 44 49 17` (CH_CMD ch=1, DI)
 - Status pill → **● STBY**
 
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-19, mock)
+**Note:** Both directions verified:
+(a) Disconnect button → $41 DI → ● DISCONNECTED
+(b) Remote disconnect via BBS "D" command → ● DISCONNECTED
+Hardware test against real second station still outstanding.
+
+---
+
+### T83 — Mock-TNC BBS: Connect-button gating
+Prerequisite: `python tools/mock_tnc_bbs.py --trace`
+
+1. Initial: Connect enabled, Disconnect disabled
+2. Click **Connect** (Dest: OE1XYZ) → CALLING
+3. After CONNECTED: Connect DISABLED (no double CO possible), Disconnect ENABLED
+4. Click **Disconnect** → DISCONNECTED
+5. Connect ENABLED again + uncheckable, Disconnect DISABLED
+6. Re-connect possible
+
+**Expected result:** Button gating correct in every state.
+
+**Status:** ✅ PASS (2026-06-19, mock — commits packet_screen.py + main_window.py)
+
+---
+
+### T84 — Mock-TNC BBS: full BBS session
+Prerequisite: `python tools/mock_tnc_bbs.py --trace`
+
+1. Connect → OE1XYZ → CONNECTED + banner in the RX window
+2. "L" + Enter → List of Messages (#1–#4)
+3. "R 2" + Enter → "#2: The Quick Brown Fox"
+4. "R 4" + Enter → "#4: Don't mess with Texas"
+5. Unknown command → menu repeated
+6. "D" + Enter → "Goodbye! OE1XYZ BBS" + DISCONNECTED
+
+**Expected result:** all steps correct, status pill follows the link state.
+
+**Status:** ✅ PASS (2026-06-19, mock)
 
 ---
 
@@ -698,6 +741,79 @@ must not be committed; it is only a local fallback.
 
 ---
 
+### T81 — FAX hardware: WAV-Direkteinspeisung in den TNC (Bargraph-Sync)
+Verifiziert den realen TNC-Demodulationspfad — NICHT den Software-Decoder. Die
+TNC-getaktete WAV (Mitte 1700 Hz, Shift 1000, schwarz 1200 / weiß 2200) muss am
+PK-232 sauberen Mark/Space-Hub am Diskriminator-Bargraph erzeugen.
+
+Vorbereitung:
+- `python tools/fax_wav_generator.py --target tnc` (erzeugt *_tnc.wav)
+- TNC in FAX-Opmode (`FAX` → `Opmode now FAX`, `OPMODE` → `FAX STBY RCVE`)
+- THRESHOLD-Regler voll im Uhrzeigersinn (rechter Anschlag) — sonst kein Slicer-Output
+- Audiopegel so einstellen, dass die DCD-LED gerade aufleuchtet
+
+Ablauf:
+1. `fax_test_wetterkarte_tnc.wav` direkt in den RADIO-Audioeingang des TNC
+   spielen (Loopback/Kabel)
+2. 10-Segment-Bargraph (HF-Tuning-Indikator) beobachten
+3. Optional `LOCK` eingeben, um den Bilddruck/-empfang ohne Warten auf das
+   Phasing zu forcieren
+
+Expected result:
+- Bargraph schwingt DEUTLICH zwischen Mark und Space (nicht nur Zittern) im Takt
+  der Schwarz/Weiß-Pixel
+- TNC erkennt das Phasing-Signal und verlässt STBY RCVE Richtung Empfang
+- Bild kommt erkennbar an (mit `LOCK` ggf. horizontal versetzt — via `JUSTIFY n`
+  in ½-Zoll-Schritten korrigierbar)
+
+Diagnose bei Fehler:
+- Bargraph zittert nur / kein Sync → Tonlage passt nicht: versehentlich die
+  SW-WAV (1500/2300, ohne _tnc-Suffix) erwischt, ODER der Audiotreiber resampled
+  die 11025-Hz-Datei (LPM verschoben). Mit _tnc-WAV und ohne Resampling testen.
+- Zu wenig DCD-Reaktion → Pegel zu niedrig oder THRESHOLD nicht am rechten Anschlag
+- Bild invertiert → am TNC `FAXNEG` togglen
+
+KRITISCH: NIE eine SW-WAV (1500/2300) für diesen Test verwenden — die rastet am
+TNC nicht ein. Umgekehrt eine *_tnc.wav NICHT in fax_decoder_test.py öffnen.
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+
+---
+
+### T82 — FAX hardware: vollständiger Live-Bilddecode (Epson → Bild)
+Verifiziert den realen Decode-Pfad: $3F-Frames (Epson 9-Pin ESC-L-Druckergrafik)
+→ EpsonFaxParser → 8-Zeilen-Bänder → FaxImageWidget.
+
+Vorbereitung:
+- python tools/fax_wav_generator.py --target tnc
+- FAX-Opmode, FSPEED 2 (120 LPM), ASPECT 2 (IOC 576)
+
+Ablauf:
+1. Clear → fax_test_pattern_tnc.wav einspielen → LOCK (Force Receive)
+2. Bildaufbau beobachten, dann Stop am Ende
+3. fax_test_wetterkarte_tnc.wav analog
+
+Expected result:
+- Log zeigt [FAX] line n, Zeilenzähler steigt; KEIN Schrägraster, KEINE
+  Vertikalnaht (= Parser ok)
+- Testmuster: Kreis RUND (nicht liegend-oval = PIXEL_ASPECT ok), Vertikalbalken
+  trennbar, Text „SYNTHETIC WEFAX TEST CHART …" lesbar
+- FAXNEG: Umschalten kippt das GANZE Bild gleichmäßig (keine Streifen =
+  Polaritäts-Bugfix ok). RXREV ON + FAXNEG ON (oder beide OFF) = korrekte Polarität
+- Smoothing-Regler: 0 = scharfe Roh-Dots (Original erhalten); steigend → Dither
+  löst sich in Grau auf; Sweet Spot = Körnigkeit weg, dünne Linien/Ziffern noch
+  lesbar
+- Stop: friert Bild ein, weitere Daten ignoriert; LOCK/Clear nimmt wieder auf
+
+Diagnose bei Fehler:
+- Schrägraster/Vertikalnaht → Parser-Regression (Rohbytes als Graustufe)
+- Kreis oval → PIXEL_ASPECT-Regression
+- Gebänderte Polarität → FAXNEG sendet wieder FN an den TNC (Regression)
+
+**Status:** ⬜ OPEN (Hardware-Test ausstehend)
+
+---
+
 ## Open Items Summary
 
 | Priority | Topic | Tests |
@@ -708,6 +824,8 @@ must not be committed; it is only a local fallback.
 | Medium | PACTOR/AMTOR identity, focus | T52–T58 |
 | Low | APRS buffer on mode switch | T65 |
 | Medium | FAX closed-loop decode (tools/) — steps written, local run pending | T66–T68 |
+| Medium | FAX hardware: WAV→TNC bargraph sync (tnc-WAV direkt) | T81 |
+| Medium | FAX hardware: full live image decode (Epson→Bild) | T82 |
 | Low | Multi-cycle RTTY colour | T18 |
 | Low | Macro full integration | T19–T22 |
 | Low | Help Viewer | T27–T28 |
