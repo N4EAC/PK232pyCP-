@@ -1239,6 +1239,14 @@ class MainWindow(QMainWindow):
                 status = "FEC TX"
             else:
                 status = "STBY"
+            # Packet only: gate Connect/Disconnect by link state so a second CO
+            # cannot be sent while connected or calling. Guarded by hasattr so
+            # AMTOR/PACTOR screens (no set_link_state) are unaffected.
+            if hasattr(screen, "set_link_state"):
+                if status in ("CONNECTED", "CALLING"):
+                    screen.set_link_state(status.lower())
+                elif status == "DISCONNECTED":
+                    screen.set_link_state("disconnected")
             screen._set_status(status)
         return handler
 
@@ -2380,6 +2388,12 @@ class MainWindow(QMainWindow):
         # the $4x channel frame (build_ch_cmd) directly, preserving the channel.
         self._serial.send_channel_command(1, b'CO', callsign.encode('ascii'))
         self._log_monitor(f"[PACKET] Connecting \u2192 {callsign}")
+        # Disable Connect immediately (CALLING): the CO is out, awaiting
+        # CONNECTED \u2014 prevent a second CO before the link comes up. Disconnect
+        # stays enabled so the user can abort. (set_link_state exists only on
+        # the packet screen.)
+        if hasattr(screen, "set_link_state"):
+            screen.set_link_state("calling")
 
     def _on_packet_disconnect(self) -> None:
         """Disconnect button clicked — send DI frame to TNC."""
