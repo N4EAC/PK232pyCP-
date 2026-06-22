@@ -1137,6 +1137,10 @@ class MainWindow(QMainWindow):
             else:
                 mode.on_monitor_frame = self._on_mode_data_received
 
+        # MHEARD list entries (polled line-by-line via Refresh, T41)
+        if hasattr(mode, "on_mheard_entry"):
+            mode.on_mheard_entry = self._on_mheard_entry_received
+
         # PACTOR FEC / Unproto data ($3F) — same handler as ARQ data
         if hasattr(mode, "on_fec_received"):
             mode.on_fec_received = self._on_mode_data_received
@@ -2467,13 +2471,72 @@ class MainWindow(QMainWindow):
         self._log_monitor("[PACKET] MDCHECK \u2014 logging in to MailDrop")
 
     def _on_packet_mheard(self) -> None:
-        """MHEARD Refresh — send MH command to TNC."""
+        """MHEARD Refresh — poll the heard-stations list line by line (T41).
+
+        TRM §4.11: in Host Mode the MHEARD list is NOT returned by a single
+        'MH' command — the verbose response is too long for the small Host Mode
+        response buffer.  It must be polled one line at a time: MH0, MH1, … up
+        to MH17, until an empty response (SOH $4F 'M' 'H' $00 ETB) signals the
+        end of the list (≤ 18 entries, lines 0–17).
+
+        Lernmodus — why fire-and-forget instead of waiting for each line:
+        SerialManager is asynchronous — a reader/worker thread delivers each
+        response later as a CMD_RESP, dispatched to handle_frame on the Qt event
+        loop.  Blocking the GUI thread to wait for each MHx reply would freeze
+        the UI (and risk a deadlock against that same thread).  So we send all
+        18 poll frames in one burst; the TNC answers them in order and each
+        reply arrives as a CMD_RESP (mnemonic 'MH') → HFPacketMode.on_mheard_entry
+        → _on_mheard_entry_received().  Polls past the end of the list simply
+        return empty responses, which the mode layer filters out.
+
+        (TRM also warns the list can go inconsistent if a packet arrives mid-poll;
+        the suggested HBAUD-110 workaround is intentionally NOT done here — too
+        complex for v0.1.)
+        """
         if not self._serial.is_connected or not self._serial.is_host_mode:
             return
-        from pk232py.comm.frame import build_command
-        frame = build_command(b'MH')
-        self._serial.send_command(frame[2:4], frame[4:-1])
-        self._log_monitor("[PACKET] MHEARD requested")
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, 'mheard_panel'):
+            screen.mheard_panel.clear()
+        # Line index is ASCII decimal: MH0..MH9 then MH10..MH17 (two digits),
+        # i.e. b'MH'+b'0' … b'MH'+b'17' — str(i) covers both without a hex trap.
+        for i in range(18):
+            self._serial.send_command(b'MH', str(i).encode('ascii'))
+        self._log_monitor("[PACKET] MHEARD list requested (MH0..MH17)")
+
+    @staticmethod
+    def _parse_mheard_line(line: str) -> tuple[str, str, bool]:
+        """Parse one MHEARD response line → (callsign, time_str, direct).
+
+        Robust against DAYTIME being on or off (TRM): the time stamp may or may
+        not be present, so we detect it by the ':' in the first token.
+          "18:06:27 OE3GAS*" → ("OE3GAS", "18:06", True)   ('*' = heard direct)
+          "OE1XYZ"           → ("OE1XYZ", "", False)
+        A trailing DAYSTAMP date prefix is not handled (ignored) — too complex
+        for v0.1.
+        """
+        tokens = line.strip().split()
+        if not tokens:
+            return ("", "", False)
+        # Time token (if any) contains ':' — truncate to HH:MM.
+        if len(tokens) >= 2 and ':' in tokens[0]:
+            time_str = tokens[0][:5]
+            call_token = tokens[1]
+        else:
+            time_str = ""
+            call_token = tokens[0]
+        direct = call_token.endswith('*')
+        callsign = call_token.rstrip('*').strip()
+        return (callsign, time_str, direct)
+
+    def _on_mheard_entry_received(self, line: str) -> None:
+        """One MHEARD line arrived (CMD_RESP 'MH') — add it to the panel."""
+        callsign, time_str, direct = self._parse_mheard_line(line)
+        if not callsign:
+            return
+        screen = self._opmode_stack.currentWidget()
+        if hasattr(screen, 'mheard_panel'):
+            screen.mheard_panel.add_entry(callsign, time_str, direct)
 
     def _on_packet_hbaud_changed(self, index: int) -> None:
         """HBAUD dropdown changed — send HB {value} to TNC."""
