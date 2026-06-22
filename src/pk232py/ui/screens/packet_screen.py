@@ -647,10 +647,16 @@ class PacketBaseScreen(QWidget):
 
         state:
           'connected' / 'calling' — Connect disabled (no double CO), Disconnect
-              enabled. CALLING keeps Connect pressed-but-disabled so it cannot
-              be un-toggled into a half-aborted state; use Disconnect to abort.
+              enabled, Unproto disabled. CALLING keeps Connect pressed-but-
+              disabled so it cannot be un-toggled into a half-aborted state; use
+              Disconnect to abort.
           anything else (disconnected / idle) — Connect re-enabled and visually
-              released, Disconnect disabled.
+              released, Disconnect disabled, Unproto re-enabled.
+
+        T39: Connect and Unproto are mutually exclusive (like PTT modes) — a
+        connected/pending AX.25 link must not also run UNPROTO UI frames, so the
+        Unproto button is greyed while a link is up or calling and restored once
+        the link is down.
 
         Does NOT touch the status pill (caller owns _set_status) and blocks
         signals while releasing Connect so it does not re-fire the toggle/CO.
@@ -658,6 +664,7 @@ class PacketBaseScreen(QWidget):
         if state.lower() in ("connected", "calling"):
             self.btn_connect.setEnabled(False)
             self.btn_disconnect.setEnabled(True)
+            self.btn_unproto.setEnabled(False)   # T39: no UNPROTO while linked
         else:
             self.btn_connect.setEnabled(True)
             self.btn_connect.blockSignals(True)
@@ -665,6 +672,7 @@ class PacketBaseScreen(QWidget):
             self.btn_connect.blockSignals(False)
             self.btn_connect.setStyleSheet(_STYLE_CONNECT_OFF)
             self.btn_disconnect.setEnabled(False)
+            self.btn_unproto.setEnabled(True)    # T39: UNPROTO available when idle
 
     def on_connect_toggled(self, checked: bool) -> None:
         """Visual feedback for Connect button toggle.
