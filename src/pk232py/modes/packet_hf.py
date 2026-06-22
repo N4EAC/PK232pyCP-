@@ -86,6 +86,10 @@ class HFPacketMode(BaseMode):
         self.on_monitor_frame: Optional[Callable[[bytes], None]]      = None
         self.on_link_message:  Optional[Callable[[int, str], None]]   = None
         self.on_data_ack:      Optional[Callable[[int], None]]        = None
+        # One MHEARD line per call (polled line-by-line, TRM §4.11). The raw
+        # ASCII line text, e.g. "18:06 OE3GAS*"; end-of-list lines are filtered
+        # out before this fires.
+        self.on_mheard_entry:  Optional[Callable[[str], None]]        = None
 
     # ------------------------------------------------------------------
     # BaseMode interface
@@ -149,6 +153,9 @@ class HFPacketMode(BaseMode):
 
         elif kind == FrameKind.STATUS_ERR:
             self._handle_status_err(frame)
+
+        elif kind == FrameKind.CMD_RESP:
+            self._handle_cmd_resp(frame)
 
         else:
             logger.debug("HFPacket: unhandled frame %r", frame)
@@ -270,3 +277,18 @@ class HFPacketMode(BaseMode):
             logger.warning(
                 "Status error ch=%d data=%s", frame.channel, frame.data.hex()
             )
+
+    def _handle_cmd_resp(self, frame: "HostFrame") -> None:
+        """Handle $4F — command response.  Currently only MHEARD lines.
+
+        The MHEARD list is polled line-by-line (MH0..MH17, TRM §4.11): each
+        line arrives as a CMD_RESP whose payload is ``b'MH'`` + the line text,
+        e.g. ``b'MH18:06 OE3GAS*'``.  "No more entries" is ``b'MH'`` + ``$00``
+        (or just ``b'MH'``).  Forward each non-empty line to on_mheard_entry;
+        plain command ACKs (EA/PS/HB/… → ``b'XX' + $00``) are ignored here.
+        """
+        if frame.mnemonic != b'MH':
+            return
+        line_data = frame.data[2:]   # strip the 'MH' echo → the line itself
+        if line_data and line_data != b'\x00' and self.on_mheard_entry:
+            self.on_mheard_entry(line_data.decode('ascii', errors='replace'))
