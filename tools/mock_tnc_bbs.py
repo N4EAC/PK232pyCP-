@@ -282,6 +282,8 @@ class LoopbackTNC:
             mnem = data[:2]
             if mnem == b"GG":                         # GG poll
                 self._handle_poll()
+            elif mnem == b"MH":                       # MHEARD line poll (MHx)
+                self._handle_mheard(data[2:])
             else:                                     # any other command → ACK
                 self._push_frame(CTL_RX_CMD_RESP, mnem + bytes([CmdError.OK]))
             return
@@ -301,6 +303,32 @@ class LoopbackTNC:
         elif rng == CTL_TX_DATA_BASE:                 # $2x connected data
             self._channel = ch
             self._emit_bbs(self._bbs.data(data))
+
+    # MHEARD test data: line index → payload AFTER the 'MH' mnemonic echo.
+    # Mirrors a real PK-232 Host Mode MH line: "HH:MM CALL[*]" ('*' = direct,
+    # i.e. heard with no digipeater). Lines 3..17 are absent → end-of-list.
+    _MHEARD_LINES = {
+        0: b"18:06 OE3GAS*",
+        1: b"18:05 OE1XYZ",
+        2: b"18:04 DB0MUC",
+    }
+
+    def _handle_mheard(self, index_arg: bytes) -> None:
+        """Answer one MHEARD line poll (MHx, TRM §4.11).
+
+        index_arg is the ASCII line number ('0'..'17'). A known line returns
+        b'MH' + "HH:MM CALL[*]"; any other / out-of-range index returns the
+        end-of-list marker b'MH' + $00 so the host stops polling.
+        """
+        try:
+            idx = int(index_arg.decode("ascii", "replace"))
+        except ValueError:
+            idx = -1
+        line = self._MHEARD_LINES.get(idx)
+        if line:
+            self._push_frame(CTL_RX_CMD_RESP, b"MH" + line)
+        else:
+            self._push_frame(CTL_RX_CMD_RESP, b"MH" + bytes([0x00]))
 
     def _handle_poll(self) -> None:
         """GG poll: nothing pending → GG-OK; otherwise the queued frame(s) are
