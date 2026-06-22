@@ -1713,8 +1713,8 @@ class MainWindow(QMainWindow):
 
         Modes without a continuously-keyed buffer (Packet is frame-based;
         PACTOR runs outside Host Mode) send no stop command — see
-        ``_CLEAR_TX_STOP_CMD``. AMTOR/Packet/PACTOR commands beyond RC are not
-        yet hardware-verified (Paket 3 / Stop Sending — Testplan T17).
+        ``_CLEAR_TX_STOP_CMD``. The stop commands (RC for RTTY/Morse, AM for
+        AMTOR) are software-verified against the mock TNC (Testplan T17/T85).
         """
         from pk232py.comm.frame import build_command
 
@@ -1724,8 +1724,15 @@ class MainWindow(QMainWindow):
         mode_name = mode.name if mode is not None else ""
 
         # 1. Abort the TNC transmission so already-sent chars stop on air.
+        #    AMTOR has no SEND/RECEIVE button, so _send_active is never set for
+        #    it — ARQ TX is CONNECTED-triggered, not button-triggered (see
+        #    _make_link_handler). Its only TX-abort path is therefore Clear TX,
+        #    so for AMTOR always send the AM stop command (harmless when already
+        #    in standby). For the button-driven modes keep the _send_active
+        #    guard so an idle Clear TX does not needlessly key the TNC with RC.
         stop = self._CLEAR_TX_STOP_CMD.get(mode_name)
-        if (self._send_active and stop is not None
+        is_amtor = mode_name in ("AMTOR ARQ", "AMTOR FEC")
+        if (stop is not None and (self._send_active or is_amtor)
                 and self._serial.is_connected and self._serial.is_host_mode):
             frame = build_command(stop)
             self._serial.send_command(frame[2:4], frame[4:-1])
