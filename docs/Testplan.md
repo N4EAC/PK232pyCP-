@@ -98,8 +98,14 @@
 **Status:** ✅ OK (v10b)
 
 ### T17 — Clear TX during SEND
-**Status:** ⬜ OPEN — code reworked 2026-06-18 (full buffer flush, TX §7.2;
-Morse echo-pacing, TX §17.1).
+**Status:** ✅ PASS (2026-06-22, mock — software) — Clear TX during SEND sends the
+mode stop command (`RC` for Baudot/ASCII/Morse, `AM` for AMTOR ARQ/FEC), empties
+the TX window, calls `TxController.clear()` and drops the UI to RECEIVE. **Bugfix
+2026-06-22 (Paket 3):** AMTOR now sends `AM` even though `_send_active` is never
+set for it (no SEND/RECEIVE button — ARQ TX is CONNECTED-triggered, not
+button-triggered); `_on_clear_tx()` sends `AM` unconditionally for AMTOR while
+keeping the `_send_active` guard for the button modes. Hardware verify (incl. the
+Morse-regression check below) still pending.
 Verify on hardware: during SEND, type a long line, press **Clear TX** →
 TNC must stop keying immediately (TX §7.2), window blanks, UI returns to
 RECEIVE. Check per mode: Baudot/ASCII/Morse (`RC`), AMTOR (`AM` flush).
@@ -109,6 +115,26 @@ the TNC holds ≤ 1 char, so at most one stray char is acceptable; a whole
 buffered message resuming = fail. Also confirm Morse still keys smoothly
 (no audible inter-character gaps from `_EAS_WINDOW=1`); if gaps appear, bump
 `_EAS_WINDOW` to 2.
+
+### T85 — Stop Sending via RECEIVE button (Paket 3)
+Prerequisite: `python tools/mock_tnc_bbs.py --trace`
+
+The RECEIVE button is the ergonomic TX stop for the button-driven modes
+(Baudot/ASCII/Morse) — distinct from T17, which stops via **Clear TX**. AMTOR
+has no RECEIVE button (its only stop path is Clear TX → T17).
+
+1. Baudot/ASCII/Morse (Host Mode): press **SEND** (`XM` out), type text
+2. Press **RECEIVE** while SEND is active
+
+**Expected result:**
+- `--trace` shows `RC` going out (`_on_screen_receive(True)` → `_on_screen_send(False)`)
+- `_send_active` cleared; UI shows RECEIVE; unsent-text warning in the status bar
+  if rate-limited chars remained
+- AMTOR: N/A (no RECEIVE button — use Clear TX, T17 → `AM`)
+
+**Status:** ✅ PASS (2026-06-22, mock — software) — RECEIVE during SEND sends `RC`
+and returns the UI to receive; the `_send_active` guard prevents a second `RC`
+from the blockSignals UI sync. Hardware verify pending.
 
 ### T18 — Multi-cycle colour test
 **Status:** ⬜ OPEN
