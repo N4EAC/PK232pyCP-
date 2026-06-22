@@ -87,13 +87,17 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
   T49 NoFocus (already correct), T50 fields (already correct), T51 `VH N` on
   leaving VHF Packet. T43/T45/T46/T47 were already implemented. See Backlog.md
   "Completed (2026-06-22 — Sprint T38–T51)" and the Packet Gotchas subsection.
+- **Packet MHEARD T41/T42 done (2026-06-22, mock end-to-end):** Refresh polls
+  `MH0`..`MH17` line-by-line (TRM §4.11, fire-and-forget) → CMD_RESP `MH` lines
+  → `_parse_mheard_line()` → `MheardPanel`; Clear is a local `panel.clear()`.
+  See the MHEARD gotcha under "TNC / firmware v7.1".
 
 ### Open / next sprint
 
-- Packet: Connect/Disconnect flow (T33–T39) — software-verified via mock;
-  hardware re-test needs a second AX.25 station. T38/T39 also need an
-  interactive mock GUI re-click (frame-level PASS).
-- Packet: MHEARD panel (T41–T42)
+- Packet hardware re-tests (need a real AX.25 second station): T35/T37
+  Connect/Disconnect, T38/T39 mutual exclusion (+interactive mock GUI re-click),
+  T41/T42 MHEARD (+live-GUI Refresh click). All software/mock-verified.
+- Packet MHEARD: HBAUD-110 mid-poll consistency workaround (v0.2, Backlog).
 - PACTOR/AMTOR: identity, focus tests (T52–T58)
 - APRS: buffer cleared on mode switch (T65)
 - CTRL+D EOT Paket 2b (AMTOR): implementiert (8087564) — Hardware-Test
@@ -442,6 +446,16 @@ Grows over time.
   mnemonic against the TRM Host Mode command table — never guess. *Bug fixed
   2026-06-22:* the PASSALL toggle was wired as `PA` (= PACKET activation), so a
   click would have re-entered Packet mode instead of toggling PASSALL.
+- **MHEARD in Host Mode = line-by-line poll, NOT a single `MH` frame** (TRM
+  §4.11). `build_command(b'MH')` returns an empty response (the verbose list is
+  too long for the small Host Mode response buffer). Instead poll `MH0`…`MH17`
+  (`SOH $4F b'MH' + str(i).encode() ETB`) until the TNC replies `b'MH' + $00`
+  (end marker) or `MH17` is reached — up to 18 entries (lines 0–17). Each line
+  comes back as a CMD_RESP whose payload is `b'MH'` + the line text. **Mnemonic
+  encoding: `str(i).encode('ascii')` → `b'0'`..`b'17'`** — `bytes([0x30+i])`
+  breaks for `i>=10` (the hex `$3A` trap). The poll is fire-and-forget (don't
+  block the GUI thread; SerialManager is async). CAUTION: a Packet frame
+  arriving mid-poll can garble the list — HBAUD-110 workaround deferred to v0.2.
 
 ### Packet (HF / VHF)
 
