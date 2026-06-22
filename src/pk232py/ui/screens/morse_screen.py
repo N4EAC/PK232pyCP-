@@ -116,6 +116,10 @@ class MorseScreen(QWidget):
         # Initialer Focus: Cursor sofort ins TX-Fenster setzen
         QTimer.singleShot(0, lambda: self.tx_input.setFocus())
 
+        # Central tooltips — applied after all widgets are built.
+        from pk232py.ui.tooltips import apply_tooltips
+        apply_tooltips(self)
+
     # ------------------------------------------------------------------
     # Event-Filter: TX-Fenster behält immer den Keyboard-Focus
     # ------------------------------------------------------------------
