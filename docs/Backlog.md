@@ -119,8 +119,15 @@ Kein neuer "Stop TX"-Button nötig — die vorhandenen Pfade decken alle Modes a
 - Sentinel-Encoding dokumentieren: `\x1b` + str(n)
 - Backspace-Handling (dict-basiert, variable Länge) dokumentieren
 
-### TooltipManager
-- `TooltipManager` — central tooltip registration for buttons
+### Tooltip system — ✅ DONE (2026-06-22)
+- `tooltips.py`: global `TOOLTIPS` (by attribute name) + per-class
+  `SCREEN_TOOLTIPS` overrides; `apply_tooltips(widget)` applies global then
+  class-specific. Wired into all 10 screens (RttyBaseScreen covers Baudot+ASCII).
+- PACTOR inline tooltips migrated + removed.
+- Name collisions resolved via SCREEN_TOOLTIPS (btn_connect AX.25↔PACTOR,
+  btn_rxrev RTTY↔FAX, btn_lock Morse↔FAX, btn_stby AMTOR↔PACTOR,
+  btn_clear FAX image↔MHEARD list).
+- **Open:** T86 PASSALL mnemonic `PS` vs `PX` — hardware verification.
 
 ### MSPEED from TNC config
 - Auto-set `TxController.set_mspeed()` / `set_mspeed_ms()` from `PK232.INI` MSPEED
@@ -159,6 +166,25 @@ AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
 
 ### MailDrop
 - TNC mailbox functionality (`maildrop/` directory planned)
+
+---
+
+## Completed (2026-06-22 — Tooltip system)
+
+| Item | Notes |
+|------|-------|
+| `tooltips.py` | Global `TOOLTIPS` (by actual attribute name) + per-class `SCREEN_TOOLTIPS` overrides. `apply_tooltips(widget)` applies global then `SCREEN_TOOLTIPS[type(widget).__name__]`, skipping non-existent/non-widget attrs. |
+| 10 screens wired | RttyBaseScreen (→ Baudot + ASCII), AmtorScreen, MorseScreen, PactorScreen, NavtexScreen, FaxScreen, SignalScreen, PacketBaseScreen + a second pass on MheardPanel. |
+| Name collisions | Per-class overrides for btn_connect (AX.25↔PACTOR), btn_rxrev (RTTY↔FAX), btn_lock (Morse↔FAX), btn_stby (AMTOR↔PACTOR), btn_clear (FAX image↔MHEARD list). A flat dict could not disambiguate these. |
+| Key reconciliation | Provided dict keys mapped to real attribute names (fax btn_fax_*→btn_lock/btn_stop/btn_clear(+image), sliders→_lh_slider/_smooth_slider; signal→btn_neue_analyse; pactor→btn_connect/disconnect/stby; figs→btn_figs/btn_chars; mheard→btn_refresh/btn_clear). |
+| PACTOR inline tooltips | Removed (registry-driven now); lbl_myptcall inline kept. |
+| `btn_mopt` | Does not exist anywhere (grep-confirmed) — no removal commit needed. |
+| T86 | PASSALL `PS` vs `PX`: documented as OPEN; `b'PS'` left unchanged pending hardware. |
+
+**Verification:** 70 unit tests pass; all files byte-compile. Headless
+(offscreen Qt) instantiation of every screen confirmed each representative
+tooltip applies, including the collision overrides (PACTOR connect, FAX rxrev/
+lock, MHEARD clear) vs the global defaults (Packet connect = AX.25).
 
 ---
 
