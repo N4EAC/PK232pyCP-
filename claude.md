@@ -2,7 +2,7 @@
 
 > This file is the single entry point for Claude Code to understand the
 > PK232PY project. Read it completely before touching any source file.
-> Last updated: 2026-06-18
+> Last updated: 2026-06-22
 
 ---
 
@@ -70,12 +70,30 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
   out-of-Host-Mode PACTOR have no keyed buffer → local clear only (no stop cmd).
 - FAX closed-loop test tooling under `tools/` (`fax_wav_generator.py` +
   `fax_decoder_test.py`); decoder is test-only and never shipped
+- **FAX live image decode implemented (2026-06-18, hardware-verified T82):**
+  `EpsonFaxParser` decodes the `$3F` Epson 9-pin printer-graphics stream into
+  grayscale rows; display pixel-aspect fix (`PIXEL_ASPECT = 120/72`);
+  non-destructive smoothing slider; LOCK (force receive) + Stop (freeze)
+  buttons; FAXNEG as display-only invert; `fax_wav_generator.py --target tnc`
+  bench WAVs. See §4 and the FAX Gotchas subsection.
+
+### Active/recently completed work (continued)
+
+- **Packet toggle/button sprint T38–T51 done (2026-06-22, frame/code-verified):**
+  T38 Unproto UN frame, T39 Connect↔Unproto mutual exclusion (both directions),
+  T43 EAS, T44 PASSALL (**mnemonic bugfix `PA`→`PS`** — `PA` is PACKET activation,
+  not PASSALL), T45 HBAUD, T46 Monitor, T47 MailDrop, T48/T32 HF+VHF init frames
+  (HF now emits `VH N`+`HB 300`+`MN Y`; VHF builds its own list, no HF inherit),
+  T49 NoFocus (already correct), T50 fields (already correct), T51 `VH N` on
+  leaving VHF Packet. T43/T45/T46/T47 were already implemented. See Backlog.md
+  "Completed (2026-06-22 — Sprint T38–T51)" and the Packet Gotchas subsection.
 
 ### Open / next sprint
 
-- Packet: Connect/Disconnect flow (T33–T39) — needs second AX.25 station
+- Packet: Connect/Disconnect flow (T33–T39) — software-verified via mock;
+  hardware re-test needs a second AX.25 station. T38/T39 also need an
+  interactive mock GUI re-click (frame-level PASS).
 - Packet: MHEARD panel (T41–T42)
-- Packet: Remaining toggle/button tests (T43–T51)
 - PACTOR/AMTOR: identity, focus tests (T52–T58)
 - APRS: buffer cleared on mode switch (T65)
 - CTRL+D EOT Paket 2b (AMTOR): implementiert (8087564) — Hardware-Test
@@ -211,11 +229,16 @@ object**. Reusing the old object causes 20–35 second buffering delays.
 - `PT` mnemonic = PACTIME, not PACTOR. PACTOR activation = verbose `PACTOR\r\n`
 - FAX mode stays in Host Mode (FA command); does not exit it — there is **no
   verbose_command path for FAX** (unlike PACTOR, which leaves Host Mode)
-- **FAX decoding is done by the TNC itself:** the PK-232 demodulates the FAX
-  audio and streams the image as ESC-L pixel runs over Host Mode; the app only
-  renders those pixels. The `tools/` WEFAX decoder is a *closed-loop test*
-  substitute for the TNC (generator → WAV → decoder, no radio/hardware) and is
-  **never integrated into `pk232py`** (it is GPL v3; the app is GPL v2)
+- **FAX demodulation is done by the TNC itself:** the PK-232 demodulates the
+  FAX audio and streams the image over `$3F` as an **Epson 9-pin
+  printer-graphics stream** — `ESC L n_lo n_hi` (double-density bit image,
+  `N = n_lo + 256·n_hi` columns, 8 vertical pixels/byte, **D7 = top, bit set =
+  black**) plus `ESC A` band separators — NOT a grayscale scan line. The app's
+  `EpsonFaxParser` (`modes/fax.py`) decodes this into grayscale rows live
+  (hardware-verified, Testplan T82). The `tools/` WEFAX *audio* decoder is a
+  separate *closed-loop test* substitute for the TNC's demodulator (generator →
+  WAV → decoder, no radio/hardware) and is **never integrated into `pk232py`**
+  (it is GPL v3; the app is GPL v2)
 
 ### 5. UI conventions
 
@@ -346,7 +369,7 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
 | `TX_STATE_MACHINE.md` | TX character flow, paste handling, backspace sentinel |
 | `Eventfilter_architecture.md` | Three-level event filter architecture |
 | `Backlog.md` | Prioritised open work items |
-| `Testplan.md` | Test cases T01–T79 with pass/fail status |
+| `Testplan.md` | Test cases T01–T82 with pass/fail status |
 | `pk232py_sources.txt` | Complete source code export (authoritative) |
 | `AEA-PK-232-TechnicalReferenceManual.pdf` | Hardware reference (Host Mode protocol) |
 | `PPWIN.HLP` | PCPackRatt help file (reference for UI feature parity) |
@@ -357,11 +380,12 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
 
 ### Immediate (next session)
 
-1. **Packet Connect/Disconnect** — wire CO/DI frames, CONNECTED status pill (T33–T39);
-   requires second AX.25 station on 144.800 MHz
+1. **Packet Connect/Disconnect** — CO/DI frames + CONNECTED pill software-verified
+   via mock (T33–T39); hardware re-test needs a second AX.25 station on
+   144.800 MHz. T38/T39 also need an interactive mock GUI re-click.
 2. **Packet MHEARD** — parse MH frame into MheardPanel (T41–T42)
-3. **Packet toggle/button tests** — EAS, PASSALL, HBAUD, Monitor level,
-   MailDrop, VHF init frames (T43–T51)
+3. ~~**Packet toggle/button tests** (T43–T51)~~ — **done 2026-06-22**
+   (frame/code-verified; PASSALL `PA`→`PS` bugfix). See Backlog.md.
 
 ### Medium term
 
@@ -413,6 +437,25 @@ Grows over time.
   and streams ESC-L pixels. See §4.
 - **`MOPT` = Morse Option, `ARQTOL` = AMTOR ARQ tolerance** — both are
   PACTOR-firmware-only, despite the names suggesting CW/AMTOR.
+- **Host Mode mnemonics are a fixed table, NOT first-two-letters.** MYCALL=`ML`,
+  MYSELCAL=`MG`, MYPTCALL=`MK`, PACKET=`PA`, **PASSALL=`PS`**. Verify every new
+  mnemonic against the TRM Host Mode command table — never guess. *Bug fixed
+  2026-06-22:* the PASSALL toggle was wired as `PA` (= PACKET activation), so a
+  click would have re-entered Packet mode instead of toggling PASSALL.
+
+### Packet (HF / VHF)
+
+- **PASSALL = `PS`, not `PA`** — see the mnemonic-table note above.
+- **HF/VHF init-frame inheritance trap.** `HFPacketMode.get_init_frames()` now
+  emits `VH N` + `HB 300` + `MN Y` (selects the 300 Bd HF FSK modem).
+  `VHFPacketMode` therefore must **NOT** call `super().get_init_frames()` — that
+  `VH N` would immediately undo the `VH Y` it sends in `get_activate_frames()`
+  and drop VHF back to the HF modem. VHF builds its own list (`HB 1200`, `MX 4`,
+  `SL 10`, `MN Y`). Leaving VHF Packet also sends `VH N`
+  (`_on_mode_selected` → `VHFPacketMode.vhf_off_frame()`, T51).
+- **Connect ↔ Unproto are mutually exclusive (T39).** `set_link_state()` greys
+  `btn_unproto` while connected/calling; `_on_packet_unproto()` greys
+  `btn_connect` while Unproto is on (link-busy proxy = `btn_disconnect.isEnabled()`).
 
 ### UI / PyQt6
 
@@ -423,6 +466,35 @@ Grows over time.
   so wiring both double-sends every character. See §11.
 - **`main_window.py` encoding corruption** at ~line 1503 (second file appended
   on PowerShell copy). See §10.
+
+### FAX (live image decode — implemented 2026-06-18, hardware-verified T82)
+
+- **`$3F` is Epson 9-pin printer graphics, not grayscale.** `EpsonFaxParser`
+  (`modes/fax.py`) MUST be **length-driven** and **frame-overlapping**: in the
+  DATA state it consumes exactly `N` column bytes and **never scans for escapes**
+  — `0x1B` is a valid data byte. `ESC L`/`ESC A` are recognised only in SCAN.
+  Treating raw bytes as a grayscale line was the original bug (skew/seam).
+- **Non-square raster → `PIXEL_ASPECT = 120/72`.** `ESC L` = 120 dpi horizontal,
+  `ESC A 8` = 72 dpi vertical; the display stretches the **vertical** axis by
+  120/72 (in `_apply_zoom`, smooth scaling). Without it a circle is a wide
+  ellipse. The "Line spacing" slider is a manual fine-factor that *multiplies*
+  with `PIXEL_ASPECT` (default 1 = neutral).
+- **FAXNEG = display-only invert** (in `FaxImageWidget`). Do **NOT** send the
+  `FN` frame: the TNC-side `FN` only affects *subsequent* lines, so toggling
+  mid-reception bands the polarity. **RXREV** (`RV`) *is* a real TNC command
+  (whole-stream polarity) — set it before/at the start of reception.
+- **LOCK (`LO`) = force receive/start; Stop = freeze + parser reset.** Both set
+  `MainWindow._fax_receiving`; Stop drops incoming rows and resets the parser so
+  a half-finished `ESC L` block can't bleed into the next image; Clear/LOCK
+  re-enable. The image stays on screen for viewing/saving.
+- **Smoothing = non-destructive inverse-halftoning** (`scipy.ndimage`
+  `gaussian_filter`, anisotropic `σ=(σ, σ·PIXEL_ASPECT)`, throttled recompute).
+  Display-only — slider at 0 reproduces the exact raw bilevel; Save exports the
+  currently displayed version.
+- **Test-WAV tone profiles:** `fax_wav_generator.py --target tnc` = 1200/2200 Hz
+  (PK-232 demod centre 1.7 kHz, for direct WAV→TNC) vs `--target sw` = 1500/2300
+  Hz (on-air convention, for the software audio decoder). Never feed an `sw` WAV
+  to the TNC or a `_tnc` WAV to `fax_decoder_test.py`.
 
 ### Repo / tooling
 

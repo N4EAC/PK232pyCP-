@@ -1,6 +1,6 @@
 # PK232PY — Development Backlog
 
-**Last updated:** 2026-06-19 (v16)
+**Last updated:** 2026-06-22 (v16)
 **Current version:** v0.1 (development)
 
 ---
@@ -12,26 +12,16 @@
 - ✅ Connect/Disconnect flow (T33–T37) **software-verified via the mock TNC**
   (`tools/mock_tnc_bbs.py`) — the mock replaces the second AX.25 station for
   software tests. Connect/CONNECTED/DATA/Disconnect logic confirmed.
-- **Open:** T38 Unproto with digipeater path
-- **Open:** T39 Connect/Unproto mutual exclusion
+- ✅ Toggle/button tests (T38, T39, T43–T51) **frame/code-verified** — see the
+  Completed block "2026-06-22 — Sprint T38–T51".
 - **Open:** MHEARD response (`MH` frame) → MheardPanel entries (T41–T42)
 - **Open:** T35/T37 hardware re-test: real AX.25 second station (the mock
   proves the software logic; on-air behaviour still needs a real TNC + station)
+- **Open:** T38/T39 interactive mock GUI re-click + hardware re-test
+  (frame-level PASS, live UI-click verification still pending)
 
 *Note: monitoring on 144.800 MHz has replaced most RX-only tests.
-T38/T39, MHEARD and the T35/T37 hardware re-test still need a real station.*
-
-### Packet — Remaining toggle/button tests
-
-- T43 EAS toggle (`EA Y` / `EA N`)
-- T44 PASSALL toggle
-- T45 HBAUD change
-- T46 Monitor level change
-- T47 MailDrop button (`MI` frame)
-- T48 VHF vs HF init frames (VH Y / VH N)
-- T49 Keyboard focus after button click
-- T50 Dest + UNPROTO fields
-- T51 Mode switch away from VHF Packet (`VH N`)
+MHEARD and the T35/T37 + T38/T39 hardware re-tests still need a real station.*
 
 ---
 
@@ -149,6 +139,30 @@ AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
 
 ---
 
+## Completed (2026-06-22 — Sprint T38–T51 Packet toggle/button)
+
+| Item | Notes |
+|------|-------|
+| T38 Unproto UN frame | `_on_packet_unproto()` → `build_command(b'UN', path)` — was already implemented; verified `ctl=0x4F data=b'UNCQ VIA OE3XNR-8'`. |
+| T39 Mutual exclusion Connect↔Unproto | Both directions: `set_link_state()` greys `btn_unproto` while connected/calling; `_on_packet_unproto()` greys `btn_connect` (link-busy proxy = `btn_disconnect.isEnabled()`). |
+| T43 EAS toggle `EA Y/N` | Was already implemented (toggle_map mnemonic `EA`). |
+| **T44 PASSALL toggle — BUGFIX** | Mnemonic `PA` → `PS`. `PA` is the PACKET-mode activation command; `PA Y` would have re-entered Packet mode instead of toggling PASSALL. |
+| T45 HBAUD change `HB` frame | Was already implemented (`_on_packet_hbaud_changed`). |
+| T46 Monitor level `MN` frame | Was already implemented (`_on_packet_monitor_changed`, levels 0–6). |
+| T47 MailDrop `MI` | Was already implemented (`_on_packet_maildrop`). |
+| T48/T32 HF+VHF init frames | `HFPacketMode`: `VH N` + `HB 300` + `MN Y`; `VHFPacketMode`: own list `HB 1200` + `MX 4` + `SL 10` + `MN Y` (no longer inherits the HF `VH N`, which would undo its own `VH Y`). |
+| T49 NoFocus buttons | `make_toggle_button` / `_no_focus_btn` already set `Qt.FocusPolicy.NoFocus` — verified, no change. |
+| T50 `le_dest` / `le_unproto` | Editable QLineEdit (default `CQ`) + `ScreenFocusController` registered — verified, no change. |
+| T51 VHF deactivate `VH N` | `_on_mode_selected()` sends `VHFPacketMode.vhf_off_frame()` when the outgoing mode is VHF Packet, restoring the 300 Bd HF modem. |
+
+**Verification:** frame bytes confirmed headless (venv), 70 unit tests pass, all
+changed files byte-compile. The mock ACKs any general command, so it confirms
+*that* a frame goes out — not mnemonic correctness; mnemonics were checked
+against the TRM Host Mode command table (see Known bug below). Interactive mock
+GUI re-click and hardware re-test remain open (tracked in Priority 1).
+
+---
+
 ## Completed (2026-06-19 — Mock-TNC BBS sprint)
 
 | Item | Notes |
@@ -246,8 +260,23 @@ AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
 | `CMD NAK: mnemonic=b'EE' error=0x07` | Minor | EE not supported — expected |
 | HFPacket/VHFPacket: CMD_RESP reaches mode | Minor | `handle_frame()` logs "unhandled frame" for ACKs — harmless |
 | T18 (multi-cycle colour) | Open | Not formally tested |
-| T32 HF Packet init frames | Open | Not tested |
+| T32 HF Packet init frames | ✅ Fixed | `HFPacketMode.get_init_frames()` now emits `VH N` + `HB 300` + `MN Y` (2026-06-22, frame-verified) |
 
 ---
 
-*OE3GAS | PK232PY Project | 2026-06-16*
+## Known bug — fixed (2026-06-22)
+
+**PASSALL Host Mode mnemonic was `PA`, must be `PS`.**
+The AEA PK-232 Host Mode uses `PS` for PASSALL; `PA` is the **PACKET-mode
+activation** command (`HFPacketMode.host_command`). The PASSALL toggle was
+wired as `build_command(b'PA', b'Y'/'N')`, so a single click on PASSALL would
+have re-entered Packet mode instead of toggling the PASSALL flag. Fixed in
+`main_window._wire_packet_buttons()` toggle_map (`b'PA'` → `b'PS'`).
+
+*Lesson:* AEA Host Mode tokens are a fixed table, not first-two-letters
+(MYCALL=`ML`, MYSELCAL=`MG`, MYPTCALL=`MK`, PACKET=`PA`, PASSALL=`PS`). Verify
+new mnemonics against the TRM Host Mode command table — never guess.
+
+---
+
+*OE3GAS | PK232PY Project | 2026-06-22*
