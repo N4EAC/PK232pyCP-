@@ -306,6 +306,13 @@ class PacketBaseScreen(QWidget):
         self.tx_input.installEventFilter(self)
         QTimer.singleShot(0, lambda: self.tx_input.setFocus())
 
+        # Central tooltips. The MHEARD panel is a separate QWidget with its own
+        # buttons (btn_refresh / btn_clear), so it needs its own apply_tooltips
+        # pass — those are in tooltips.SCREEN_TOOLTIPS["MheardPanel"].
+        from pk232py.ui.tooltips import apply_tooltips
+        apply_tooltips(self)
+        apply_tooltips(self.mheard_panel)
+
     # ------------------------------------------------------------------
     # EventFilter — identical to PactorScreen / AmtorScreen
     # ------------------------------------------------------------------
