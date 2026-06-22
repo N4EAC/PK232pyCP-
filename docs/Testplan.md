@@ -550,10 +550,26 @@ both directions. Interactive mock re-click pending.
 ---
 
 ### T41 — MHEARD Refresh
-**Status:** ⬜ OPEN
+Prerequisite: `python tools/mock_tnc_bbs.py --trace`
+1. Packet screen (Host Mode) → click **Refresh** in the MHEARD panel
+
+**Expected result:**
+- `--trace` shows MH0..MH17 going out; mock replies MH0..MH2 + end-marker
+- MHEARD panel fills with `OE3GAS *` (direct, green), `OE1XYZ`, `DB0MUC`
+
+**Status:** ✅ PASS (2026-06-22, mock end-to-end) — `_on_packet_mheard()` polls
+MH0..MH17 (line-by-line, TRM §4.11, fire-and-forget); CMD_RESP `MH` lines →
+`HFPacketMode.on_mheard_entry` → `_parse_mheard_line()` → `MheardPanel.add_entry()`.
+End-marker (`MH` + `$00`) and plain ACKs ignored. Decoded chain verified headless
+(MH0..MH4 → 3 stations). Live-GUI click + hardware re-test pending.
 
 ### T42 — MHEARD Clear
-**Status:** ⬜ OPEN
+1. With entries present → click **Clear** in the MHEARD panel
+
+**Expected result:** panel emptied (local `MheardPanel.clear()`)
+
+**Status:** ✅ PASS (2026-06-22) — `btn_clear` wired to `MheardPanel.clear()`;
+Refresh also clears before re-polling so the list never doubles.
 
 ### T43 — Toggle EAS
 **Status:** ✅ PASS (2026-06-22, frame-verified) — `btn_eas` → `EA Y` / `EA N`
