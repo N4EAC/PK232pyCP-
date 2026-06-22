@@ -119,6 +119,10 @@ class SignalScreen(QWidget):
 
         self._build_ui()
 
+        # Central tooltips — applied after all widgets are built.
+        from pk232py.ui.tooltips import apply_tooltips
+        apply_tooltips(self)
+
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
