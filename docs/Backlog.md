@@ -14,14 +14,19 @@
   software tests. Connect/CONNECTED/DATA/Disconnect logic confirmed.
 - ✅ Toggle/button tests (T38, T39, T43–T51) **frame/code-verified** — see the
   Completed block "2026-06-22 — Sprint T38–T51".
-- **Open:** MHEARD response (`MH` frame) → MheardPanel entries (T41–T42)
+- ✅ MHEARD Refresh/Clear (T41/T42) **mock end-to-end verified** — see the
+  Completed block "2026-06-22 — Sprint T41/T42 MHEARD".
 - **Open:** T35/T37 hardware re-test: real AX.25 second station (the mock
   proves the software logic; on-air behaviour still needs a real TNC + station)
 - **Open:** T38/T39 interactive mock GUI re-click + hardware re-test
   (frame-level PASS, live UI-click verification still pending)
+- **Open:** T41/T42 live-GUI Refresh click + hardware re-test (real station —
+  the mock proves the MH0..MH17 poll/parse logic)
+- **Open (v0.2):** MHEARD HBAUD-110 mid-poll consistency workaround
+  (TRM §4.11 — deliberately skipped in v0.1; see Priority 2)
 
 *Note: monitoring on 144.800 MHz has replaced most RX-only tests.
-MHEARD and the T35/T37 + T38/T39 hardware re-tests still need a real station.*
+The T35/T37 + T38/T39 + T41/T42 hardware re-tests still need a real station.*
 
 ---
 
@@ -35,6 +40,15 @@ MHEARD and the T35/T37 + T38/T39 hardware re-tests still need a real station.*
 | Beacon TX | UNPROTO APRS VIA WIDE1-1,WIDE2-1; periodic timer |
 | Beacon config UI | Position (lat/lon from INI), symbol, comment, interval |
 | Mic-E lon decode verify | Test with west-of-0° and lon > 100° stations |
+
+### MHEARD — HBAUD-110 mid-poll consistency workaround (v0.2)
+
+TRM §4.11 CAUTION: if a Packet frame arrives while the MHEARD list is being
+polled (`MH0`..`MH17`), the returned entries can become garbled/inconsistent.
+TRM's suggested fix: set `HBAUD 110` before the poll and restore the previous
+HBAUD afterwards. Deliberately **not** implemented in v0.1 (the save/restore +
+modem re-key adds state-machine complexity for a rare race). Revisit for v0.2
+once the basic MHEARD flow is hardware-confirmed.
 
 ### FAX closed-loop test tooling — formalise tests
 
@@ -136,6 +150,23 @@ AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
 
 ### MailDrop
 - TNC mailbox functionality (`maildrop/` directory planned)
+
+---
+
+## Completed (2026-06-22 — Sprint T41/T42 MHEARD)
+
+| Item | Notes |
+|------|-------|
+| T41 MHEARD Refresh | `_on_packet_mheard()` clears the panel, then fires `MH0`..`MH17` fire-and-forget (TRM §4.11 line-by-line poll). Replies arrive async as CMD_RESP `MH` lines. |
+| T42 MHEARD Clear | `btn_clear` → `MheardPanel.clear()` (local only); Refresh also clears before re-polling so the list never doubles. |
+| `packet_hf.py` `on_mheard_entry` callback | `handle_frame()` gained a CMD_RESP branch → `_handle_cmd_resp()`: forwards only non-empty `MH` lines; end-marker (`MH`+`$00`) and plain command ACKs ignored. |
+| `_parse_mheard_line()` | Robust to DAYTIME on/off (time token detected by `:`), `*` direct marker, `HH:MM` truncation. DAYSTAMP date prefix ignored (v0.1). |
+| `mock_tnc_bbs.py` MH responses | `MH0`→`OE3GAS*`, `MH1`→`OE1XYZ`, `MH2`→`DB0MUC`, `MH3+`→`MH`+`$00` (end-of-list). |
+
+**Verification:** 70 unit tests pass; all files byte-compile. Parser unit-checked
+(time/no-time, direct/non-direct, empty). Mode dispatch fires only for real lines.
+Full chain headless (app→mock→mode): `MH0..MH4` decoded exactly the 3 stations,
+end-markers dropped. Live-GUI click + hardware re-test pending.
 
 ---
 
