@@ -136,6 +136,22 @@ has no RECEIVE button (its only stop path is Clear TX → T17).
 and returns the UI to receive; the `_send_active` guard prevents a second `RC`
 from the blockSignals UI sync. Hardware verify pending.
 
+### T86 — PASSALL mnemonic: verify correct frame byte on TNC (PS vs PX)
+The PASSALL toggle currently sends `build_command(b'PS', …)`. A Host Mode
+command-table reading suggests `PS` = PASS and **`PX` = PASSALL** — i.e. the
+toggle might need `PX`, not `PS`. This is NOT confirmed: AEA may map PASSALL to
+`PS` regardless. **No code change without hardware verification** — `b'PS'` is
+left in place until a real TNC confirms which byte toggles PASSALL.
+
+1. HF/VHF Packet (Host Mode) → toggle **PASSALL** ON, then OFF
+2. Observe on a real PK-232 whether PASSALL actually engages (receive bad-CRC
+   frames) with `PS`; if not, retry with `PX`.
+
+**Expected result:** the byte that actually toggles PASSALL is identified;
+`main_window._wire_packet_buttons()` toggle_map is set to it.
+
+**Status:** ⬜ OPEN (requires hardware verification — see CLAUDE.md mnemonic note)
+
 ### T18 — Multi-cycle colour test
 **Status:** ⬜ OPEN
 
