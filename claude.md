@@ -102,7 +102,10 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
 - APRS: buffer cleared on mode switch (T65)
 - CTRL+D EOT Paket 2b (AMTOR): implementiert (8087564) — Hardware-Test
   T73–T79 ausstehend (T73 CONNECTED-Text zuerst, braucht zweite Station).
-- CTRL+D EOT Paket 3 (Stop Sending): offen — siehe Backlog.md.
+- Paket 3 (Stop Sending): ✅ DONE 2026-06-22 (software/mock). RC/AM/none für
+  alle Modes verifiziert; AMTOR `_send_active`-Bug gefixt (siehe Gotcha unten).
+  TxController-Zyklus Paket 1–3 abgeschlossen. Hardware-Retests T17/T85 (AMTOR
+  `AM`-Flush on-air, Morse `RC`-Regression) noch offen.
 - Hardware-Test Paket 2a (Morse): T69/T70/T72 ✅ PASS (2026-06-18, inkl.
   Space-Echo + CR/LF-Stall behoben, neuer T80 CR/LF PASS); T71 (Macro [^D])
   noch ausstehend.
@@ -351,9 +354,15 @@ no serial I/O, no widget refs. Key learnings from the 2026-06-16 session:
 - **Packet uses NO TxController and NO `[^D]`.** AX.25 packetises at the ETB
   character and has no character-by-character ACK, so the EOT-marker concept
   does not fit. Packet needs a Stop-button instead of an EOT marker.
-- **Stop Sending** (Paket 3, open): AMTOR → `AM` (mnemonic; standby + flush TNC
-  TX buffer — NOT `R`, which does not flush); Baudot/ASCII/Morse → `RC` +
-  flush the local `TxController` buffer (`on_send_stop()` + `clear()`).
+- **Stop Sending** (Paket 3, ✅ DONE 2026-06-22, software/mock): AMTOR → `AM`
+  (mnemonic; standby + flush TNC TX buffer — NOT `R`, which does not flush);
+  Baudot/ASCII/Morse → `RC` + flush the local `TxController` buffer
+  (`on_send_stop()` + `clear()`). No new "Stop TX" button was needed — the
+  RECEIVE button (Baudot/ASCII/Morse) and Clear TX (all modes) already cover it.
+  AMTOR has no RECEIVE button, so Clear TX is its only stop path; `_on_clear_tx()`
+  sends `AM` unconditionally for AMTOR (see the `_send_active` trap under Known
+  Gotchas). Packet/PACTOR send no stop command (frame-based / out of Host Mode).
+  Verified for every mode; TxController cycle Paket 1–3 closed. Hardware pending.
 - `char_ready` guard in `_wire_mode_callbacks`: only wire it when
   `not hasattr(tx, 'char_typed')`. A `TxInputWidget` already emits `char_typed`,
   so wiring `char_ready` as well would double-send.
@@ -395,8 +404,9 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
 
 4. **CTRL+D EOT — Paket 2b (AMTOR):** ARQ → `OV`, FEC → `RC`; add AMTOR to
    `_is_txctrl_mode()`. CW/Morse (Paket 2a) is done — hardware test pending.
-5. **Stop Sending — Paket 3:** Stop/Abort-TX button on all TX-capable screens
-   (AMTOR → `AM`; Baudot/ASCII/Morse → `RC` + flush; Packet TBD). See §11.
+5. ~~**Stop Sending — Paket 3**~~ ✅ DONE 2026-06-22 (software/mock). No new
+   button needed: RECEIVE (RTTY/Morse → `RC`) + Clear TX (all; AMTOR → `AM`)
+   cover it; Packet/PACTOR send none. See §11 + the `_send_active` Gotcha.
 6. **Theme persistence** — `[UI]` section in INI, `Configure → Appearance` dialog
 7. **Tooltip system** — central `tooltips.py`, apply to all screens
 8. **Help system** — split `help_baudot.md` into topic files, add Help buttons
@@ -480,6 +490,16 @@ Grows over time.
   so wiring both double-sends every character. See §11.
 - **`main_window.py` encoding corruption** at ~line 1503 (second file appended
   on PowerShell copy). See §10.
+- **AMTOR `_send_active` trap (fixed 2026-06-22).** `self._send_active` is set
+  ONLY by `_on_screen_send(True)` — the SEND-button path. AMTOR has no SEND/
+  RECEIVE button: its ARQ TX starts via `_make_link_handler()` →
+  `on_send_start()` (CONNECTED trigger). So any `if self._send_active:` guard
+  silently skips AMTOR. This made Clear TX drop the `AM` flush for AMTOR. Fix:
+  `_on_clear_tx()` sends `AM` unconditionally for AMTOR ARQ/FEC; the
+  `_send_active` guard is kept only for the button-driven modes (Baudot/ASCII/
+  Morse), where an idle Clear TX must not needlessly key the TNC with `RC`.
+  *Rule:* never gate AMTOR behaviour on `_send_active` — derive AMTOR TX state
+  from the link (CONNECTED) or the screen sub-state, never the SEND flag.
 
 ### FAX (live image decode — implemented 2026-06-18, hardware-verified T82)
 
