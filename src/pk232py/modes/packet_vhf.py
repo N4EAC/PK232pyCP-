@@ -67,16 +67,20 @@ class VHFPacketMode(HFPacketMode):
     def get_init_frames(self) -> list[bytes]:
         """Return VHF-specific parameter frames.
 
-        Inherits monitor ON from HFPacketMode.get_init_frames() and
-        adds VHF-optimised defaults: HBAUD 1200, MAXFRAME 4, SLOTTIME 10.
+        Sequence (Testplan T31): HB 1200, MX 4, SL 10, MN Y.  ``VH Y`` is
+        already sent in get_activate_frames().
+
+        Lernmodus: this deliberately does NOT call super().get_init_frames().
+        The HF base now emits ``VH N`` (VHF OFF) to select the 300 Bd modem;
+        inheriting that here would immediately undo the ``VH Y`` we just sent
+        and drop VHF Packet back to the HF modem.  So VHF builds its own list.
         """
-        frames = super().get_init_frames()   # includes MONITOR ON
-        frames += [
+        return [
             build_command(b'HB', b'1200'),  # HBAUD 1200
             build_command(b'MX', b'4'),     # MAXFRAME 4
             build_command(b'SL', b'10'),    # SLOTTIME 10 (10ms units = 100ms)
+            build_command(b'MN', b'Y'),     # MONITOR ON — receive unproto frames
         ]
-        return frames
 
     def deactivate(self) -> None:
         """Mark mode as inactive.

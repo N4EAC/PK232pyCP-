@@ -101,11 +101,18 @@ class HFPacketMode(BaseMode):
     def get_init_frames(self) -> list[bytes]:
         """Return parameter frames sent after Packet mode is confirmed.
 
-        Currently enables the frame monitor (MONITOR ON).
-        Override or extend in subclasses / configuration to add more
-        parameters (HBAUD, FRACK, MAXFRAME, UNPROTO, etc.).
+        HF Packet selects the 300 Bd HF FSK modem (VHF OFF) and enables the
+        frame monitor.  Sequence (Testplan T32): VH N, HB 300, MN Y.
+
+        Lernmodus: ``VH N`` is essential here — without it, switching to HF
+        Packet *after* VHF Packet would leave the TNC on the 1200 Bd Bell-202
+        modem (VHF stays ON until explicitly cleared), so HF would never decode.
+        VHFPacketMode deliberately does NOT inherit this list (it would undo its
+        own ``VH Y``); it builds its own — see VHFPacketMode.get_init_frames().
         """
         return [
+            build_command(b'VH', b'N'),   # VHF OFF — select 300 Bd HF FSK modem
+            build_command(b'HB', b'300'), # HBAUD 300
             build_command(b'MN', b'Y'),   # MONITOR ON — receive unproto frames
         ]
 
