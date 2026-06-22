@@ -1070,6 +1070,17 @@ class MainWindow(QMainWindow):
                     f"-- exiting Host Mode temporarily"
                 )
 
+        # T51: leaving VHF Packet → restore the HF 300 Bd modem (VHF OFF) so the
+        # next mode is not stuck on the 1200 Bd Bell-202 modem. current_mode_name
+        # is still the OUTGOING mode here (set_mode deactivates it below). Only
+        # meaningful in Host Mode on a live link.
+        if (self._modes.current_mode_name == "VHF Packet"
+                and self._serial.is_connected and self._serial.is_host_mode):
+            from pk232py.modes.packet_vhf import VHFPacketMode
+            vh_off = VHFPacketMode.vhf_off_frame()
+            self._serial.send_command(vh_off[2:4], vh_off[4:-1])
+            self._log_monitor("[PACKET] Leaving VHF Packet — VHF OFF (VH N)")
+
         self._log_monitor(f"[SYS] Switching to mode: {mm_name}")
         self._modes.set_mode(mm_name)
 
@@ -2193,9 +2204,12 @@ class MainWindow(QMainWindow):
                 self._on_packet_monitor_changed)
 
         # Toggle buttons: EAS / PASSALL / MRPT / MID / SQUELCH
+        # NOTE: PASSALL is mnemonic 'PS', NOT 'PA' — 'PA' is the PACKET-mode
+        # activation command (host_command). Sending 'PA Y' here would re-enter
+        # Packet mode instead of toggling PASSALL (TRM Host Mode command table).
         toggle_map = [
             (screen.btn_eas,     b'EA'),
-            (screen.btn_passall, b'PA'),
+            (screen.btn_passall, b'PS'),
             (screen.btn_mrpt,    b'MR'),
             (screen.btn_mid,     b'MI'),
             (screen.btn_squelch, b'SQ'),
@@ -2415,14 +2429,25 @@ class MainWindow(QMainWindow):
     def _on_packet_unproto(self, checked: bool) -> None:
         """Unproto button toggled — set TNC UNPROTO path.
 
-        checked=True:  send UN {path} to TNC.
-        checked=False: no TNC command needed.
+        checked=True:  disable Connect (T39 mutual exclusion), send UN {path}.
+        checked=False: re-enable Connect when no link is up; no TNC command.
         """
+        screen = self._opmode_stack.currentWidget()
+        # T39: Connect and Unproto are mutually exclusive. Do the UI gating
+        # FIRST, independently of the link state, so the button stays consistent
+        # even when not (yet) in Host Mode. btn_disconnect is enabled only while
+        # a link is up/calling (set_link_state), so it is a reliable "link busy"
+        # proxy for deciding whether Connect may be re-enabled.
+        if hasattr(screen, "btn_connect"):
+            if checked:
+                screen.btn_connect.setEnabled(False)
+            elif not screen.btn_disconnect.isEnabled():
+                screen.btn_connect.setEnabled(True)
+
         if not self._serial.is_connected or not self._serial.is_host_mode:
             return
         if not checked:
             return
-        screen = self._opmode_stack.currentWidget()
         unproto_field = getattr(screen, "le_unproto", None)
         path = unproto_field.text().strip().upper() if unproto_field else "CQ"
         if not path:
