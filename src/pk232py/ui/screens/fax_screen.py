@@ -406,6 +406,12 @@ class FaxScreen(QWidget):
 
         self._build_ui()
 
+        # Central tooltips — applied after all widgets are built. FaxScreen
+        # overrides the colliding btn_lock/btn_rxrev/btn_clear keys with
+        # FAX-specific text (see tooltips.SCREEN_TOOLTIPS).
+        from pk232py.ui.tooltips import apply_tooltips
+        apply_tooltips(self)
+
     # ------------------------------------------------------------------
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
