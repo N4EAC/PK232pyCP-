@@ -411,7 +411,9 @@ benötigt für Gegenstation-Abbruch; STBY-Button allein testbar)
 **Expected result:**
 - `PA`, `VH N`, `HB 300`, `MN Y`
 
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — `HFPacketMode.get_init_frames()`
+now emits `VH N`, `HB 300`, `MN Y` after the `PA` activate frame. VHF no longer
+inherits `VH N` (would have undone its own `VH Y`). Hardware re-test pending.
 
 ---
 
@@ -517,12 +519,20 @@ Prerequisite: `python tools/mock_tnc_bbs.py --trace`
 
 **Expected result:** Serial: `UN CQ VIA OE3XNR-8`
 
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — `btn_unproto` → `_on_packet_unproto()`
+sends `build_command(b'UN', le_unproto.text())`. Trace: `ctl=0x4F data=b'UNCQ VIA OE3XNR-8'`.
 
 ---
 
 ### T39 — Connect and Unproto mutual exclusion
-**Status:** ⬜ OPEN
+1. Unproto ON → Connect button greyed
+2. Connect/CALLING/CONNECTED → Unproto button greyed
+3. Unproto OFF (link idle) → Connect re-enabled; link down → Unproto re-enabled
+
+**Status:** ✅ PASS (2026-06-22, code-verified) — `set_link_state()` greys/restores
+`btn_unproto` on connected/calling/idle; `_on_packet_unproto()` greys/restores
+`btn_connect` (link-busy proxy = `btn_disconnect.isEnabled()`). Mutual exclusion
+both directions. Interactive mock re-click pending.
 
 ---
 
@@ -546,31 +556,43 @@ Prerequisite: `python tools/mock_tnc_bbs.py --trace`
 **Status:** ⬜ OPEN
 
 ### T43 — Toggle EAS
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — `btn_eas` → `EA Y` / `EA N`
+(toggle_map, mnemonic `EA`). Guarded by is_connected + is_host_mode.
 
 ### T44 — Toggle PASSALL
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — **mnemonic fixed `PA` → `PS`**.
+`PA` is the PACKET-mode activation command, so the old `PA Y` would have
+re-entered Packet mode instead of toggling PASSALL. `btn_passall` → `PS Y` / `PS N`.
 
 ### T45 — HBAUD change
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — `combo_hbaud` change →
+`_on_packet_hbaud_changed()` → `HB <value>` (mnemonic `HB`).
 
 ### T46 — Monitor level change
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — `combo_monitor` (0–6) change →
+`_on_packet_monitor_changed()` → `MN <level>` (mnemonic `MN`).
 
 ### T47 — MailDrop button
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — `btn_maildrop` →
+`_on_packet_maildrop()` → `MI` (mnemonic `MI`).
 
 ### T48 — VHF vs HF Packet init frames
-**Status:** ⬜ OPEN (T31 passed for VHF, T32 open for HF)
+**Status:** ✅ PASS (2026-06-22, frame-verified) — HF emits `VH N`, VHF emits
+`VH Y`; VHF init no longer inherits the HF `VH N`. See T31/T32.
 
 ### T49 — Keyboard focus after button click
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, code-verified) — all packet buttons use
+`make_toggle_button()` / `_no_focus_btn()`, both set `Qt.FocusPolicy.NoFocus`,
+so toggle clicks never steal focus from `tx_input`.
 
 ### T50 — Dest and UNPROTO fields accept input
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, code-verified) — `le_dest` / `le_unproto` are
+editable QLineEdit (default `CQ`), both registered with `ScreenFocusController`.
 
 ### T51 — Mode switch away from Packet: VHF OFF
-**Status:** ⬜ OPEN
+**Status:** ✅ PASS (2026-06-22, frame-verified) — `_on_mode_selected()` sends
+`VH N` (`VHFPacketMode.vhf_off_frame()`) when the outgoing mode is VHF Packet,
+restoring the 300 Bd HF modem for the next mode.
 
 ---
 
