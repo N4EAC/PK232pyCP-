@@ -626,6 +626,12 @@ class RttyBaseScreen(QWidget):
         self.installEventFilter(self)
         QTimer.singleShot(0, lambda: self.tx_input.setFocus())
 
+        # Central tooltips — applied after _build_ui() (which calls the
+        # subclass's _build_mode_buttons), so every button exists. Covers all
+        # RttyBaseScreen subclasses (Baudot, ASCII).
+        from pk232py.ui.tooltips import apply_tooltips
+        apply_tooltips(self)
+
     # ------------------------------------------------------------------
     # NoFocus button helper
     # ------------------------------------------------------------------
