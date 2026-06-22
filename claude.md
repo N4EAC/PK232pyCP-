@@ -408,7 +408,10 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
    button needed: RECEIVE (RTTY/Morse → `RC`) + Clear TX (all; AMTOR → `AM`)
    cover it; Packet/PACTOR send none. See §11 + the `_send_active` Gotcha.
 6. **Theme persistence** — `[UI]` section in INI, `Configure → Appearance` dialog
-7. **Tooltip system** — central `tooltips.py`, apply to all screens
+7. ~~**Tooltip system** — central `tooltips.py`~~ ✅ DONE 2026-06-22. Global
+   `TOOLTIPS` + per-class `SCREEN_TOOLTIPS` overrides; wired into all 10 screens.
+   See the tooltip Gotcha under Known Gotchas. Follow-up: T86 PASSALL `PS`/`PX`
+   hardware verification.
 8. **Help system** — split `help_baudot.md` into topic files, add Help buttons
 
 ### Before beta
@@ -500,6 +503,24 @@ Grows over time.
   Morse), where an idle Clear TX must not needlessly key the TNC with `RC`.
   *Rule:* never gate AMTOR behaviour on `_send_active` — derive AMTOR TX state
   from the link (CONNECTED) or the screen sub-state, never the SEND flag.
+- **Tooltip name collisions — use `SCREEN_TOOLTIPS`, not a flat dict.** Several
+  widget attribute names are reused with DIFFERENT meanings across screens:
+  `btn_connect` (AX.25 Packet vs PACTOR), `btn_rxrev` (RTTY tone swap vs FAX
+  polarity), `btn_lock` (Morse sync vs FAX start), `btn_stby` (AMTOR vs PACTOR),
+  `btn_clear` (FAX image vs MHEARD list). A flat dict keyed by attribute name
+  cannot tell them apart. `tooltips.py` therefore has a global `TOOLTIPS` plus
+  per-class `SCREEN_TOOLTIPS`; `apply_tooltips()` applies global first, then the
+  class-specific overrides. New screen with a colliding name → add it to
+  `SCREEN_TOOLTIPS[ClassName]`, not the global dict. Call `apply_tooltips(self)`
+  at the END of `__init__` (after every widget is built); Baudot/ASCII have no
+  own `__init__`, so the call lives in `RttyBaseScreen.__init__`.
+- **WIDESHFT does not apply to AMTOR.** AMTOR runs at a fixed 100 Bd with fixed
+  shift; WIDESHFT (170/850 Hz) is FSK-only (Baudot/ASCII/Morse). `btn_wideshft`
+  does not exist on `AmtorScreen` and must not be added there.
+- **`btn_mopt` does not exist in the codebase** (grep-confirmed). MOPT is
+  PACTOR-firmware-only; if it ever needs a UI control, gate it behind
+  `SerialManager.has_pactor` (do not add a bare `btn_mopt` toggle). NB: Morse
+  has a `btn_moptt` (MOPTT) — a different button, intentionally not tooltip'd.
 
 ### FAX (live image decode — implemented 2026-06-18, hardware-verified T82)
 
