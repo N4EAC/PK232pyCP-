@@ -154,6 +154,12 @@ class PactorScreen(QWidget):
         # Initial focus: cursor goes straight to TX window on open
         QTimer.singleShot(0, lambda: self.tx_input.setFocus())
 
+        # Central tooltips — applied after all widgets are built. PactorScreen
+        # overrides the colliding btn_connect/btn_disconnect/btn_stby keys with
+        # PACTOR-specific text (see tooltips.SCREEN_TOOLTIPS).
+        from pk232py.ui.tooltips import apply_tooltips
+        apply_tooltips(self)
+
     # ------------------------------------------------------------------
     # EventFilter: TX window always keeps keyboard focus
     # ------------------------------------------------------------------
@@ -245,7 +251,6 @@ class PactorScreen(QWidget):
         self.le_dest.setFixedWidth(CALL_W)
         self.le_dest.setFont(QFont("Courier New", 10))
         self.le_dest.setPlaceholderText("e.g. OE3XYZ")
-        self.le_dest.setToolTip("Destination callsign for ARQ connection.")
         mode_row.addWidget(self.le_dest)
 
         mode_row.addSpacing(8)
@@ -257,11 +262,6 @@ class PactorScreen(QWidget):
                 self.btn_ptlist, on, "PTLIST", "#2255aa"
             )
         )
-        self.btn_ptlist.setToolTip(
-            "PTLIST – PACTOR listen / receive mode.\n"
-            "Monitor connected and unproto PACTOR traffic.\n"
-            "Mnemonic: PN"
-        )
         mode_row.addWidget(self.btn_ptlist)
 
         # PTSEND – FEC unproto transmission
@@ -270,11 +270,6 @@ class PactorScreen(QWidget):
             lambda on: self._on_mode_toggled(
                 self.btn_ptsend, on, "PTSEND", "#2255aa"
             )
-        )
-        self.btn_ptsend.setToolTip(
-            "PTSEND – FEC unproto transmission.\n"
-            "Broadcast without ARQ handshake (like AMTOR FEC).\n"
-            "Mnemonic: PD"
         )
         mode_row.addWidget(self.btn_ptsend)
 
@@ -294,10 +289,6 @@ class PactorScreen(QWidget):
             " border: 1px solid #661111; border-radius: 4px; padding: 4px; }"
             "QPushButton:hover { background-color: #994444; }"
         )
-        self.btn_disconnect.setToolTip(
-            "Disconnect – terminate the active ARQ connection.\n"
-            "Mnemonic: DI"
-        )
         self.btn_disconnect.clicked.connect(self._on_disconnect)
         ctrl_row.addWidget(self.btn_disconnect)
 
@@ -305,10 +296,6 @@ class PactorScreen(QWidget):
         self.btn_stby = QPushButton("STBY")
         self.btn_stby.setFixedWidth(55)
         self.btn_stby.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_stby.setToolTip(
-            "STBY – return to PACTOR standby.\n"
-            "Deactivates all mode buttons."
-        )
         self.btn_stby.clicked.connect(self._on_stby)
         ctrl_row.addWidget(self.btn_stby)
 
@@ -330,33 +317,13 @@ class PactorScreen(QWidget):
 
         self.btn_pt200   = make_toggle_button("PT200")
         self.btn_pt200.setChecked(True)    # ON by default per manual
-        self.btn_pt200.setToolTip(
-            "PT200 ON – allow automatic 100/200 baud speed selection.\n"
-            "ON recommended for modern PACTOR stations.\n"
-            "Mnemonic: P2"
-        )
 
         self.btn_pthuff  = make_toggle_button("PTHUFF")
         self.btn_pthuff.setChecked(True)   # ON by default
-        self.btn_pthuff.setToolTip(
-            "PTHUFF ON – Huffman compression for better throughput.\n"
-            "Turn OFF for binary file transfers (7-bit data only).\n"
-            "Mnemonic: PH"
-        )
 
         self.btn_ptround = make_toggle_button("PTROUND")
-        self.btn_ptround.setToolTip(
-            "PTROUND ON – after PTSEND return to PTLIST (listen).\n"
-            "PTROUND OFF – after PTSEND return to PACTOR standby.\n"
-            "Mnemonic: Pr"
-        )
 
         self.btn_eas     = make_toggle_button("EAS")
-        self.btn_eas.setToolTip(
-            "EAS – Echo As Sent.\n"
-            "Show confirmed TX characters in the RX window.\n"
-            "Mnemonic: EA"
-        )
 
         for b in (self.btn_pt200, self.btn_pthuff, self.btn_ptround, self.btn_eas):
             toggle_row.addWidget(b)
