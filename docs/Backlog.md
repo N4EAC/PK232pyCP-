@@ -90,11 +90,20 @@ Hardware-Tests T73–T79 ausstehend (T73 zuerst!).
 CRITICAL CAVEAT: `_make_link_handler()` triggert auf "connected" im
 Link-Message-Text. Falls der TNC anderen Text schickt → Handler anpassen.
 
-**Paket 3 — Stop Sending (offen):**
-Neuer "Stop TX"-Button auf allen TX-fähigen Screens.
-AMTOR → `AM` (Mnemonic, Stby + TNC-Puffer löschen; NICHT `R`).
-Baudot/ASCII/Morse → RC + `on_send_stop()` + `clear()`.
-Packet → TBD (kein EOT-Konzept).
+**Paket 3 — Stop Sending (✅ DONE 2026-06-22, software/mock):**
+Kein neuer "Stop TX"-Button nötig — die vorhandenen Pfade decken alle Modes ab:
+- Baudot/ASCII/Morse → `RC` (RECEIVE-Button **und** Clear TX).
+- AMTOR ARQ/FEC → `AM` (nur Clear TX — AMTOR hat keinen RECEIVE-Button;
+  ARQ-TX ist CONNECTED-getriggert).
+- Packet → kein Stop-Cmd (frame-basiert). PACTOR → kein Stop-Cmd (außerhalb
+  Host Mode). By design bestätigt.
+- **Bugfix:** `_on_clear_tx()` sendete `AM` nicht für AMTOR, weil `_send_active`
+  nie gesetzt wird (nur `_on_screen_send(True)` setzt es — den SEND-Button-Pfad,
+  den AMTOR nicht hat). Fix: `AM` für AMTOR ARQ/FEC unconditional; der
+  `_send_active`-Guard bleibt nur für die Button-Modes.
+- T17 PASS (Clear-TX-Pfad), T85 neu (RECEIVE-Button-Pfad) — beide software/mock.
+  Hardware-Verifikation (AMTOR `AM`-Flush, Morse `RC`-Regression) ausstehend.
+- **TxController-Zyklus Paket 1–3 abgeschlossen.**
 
 ### Help system — ausdifferenzieren
 - `help_baudot.md` exists as one large file
@@ -150,6 +159,22 @@ AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
 
 ### MailDrop
 - TNC mailbox functionality (`maildrop/` directory planned)
+
+---
+
+## Completed (2026-06-22 — Paket 3 Stop Sending)
+
+| Item | Notes |
+|------|-------|
+| T17 Stop Sending — Clear TX | PASS (software/mock). Clear TX during SEND sends the mode stop cmd (`RC` RTTY/Morse, `AM` AMTOR), empties TX, `TxController.clear()`, UI → RECEIVE. AMTOR `AM` bug fixed. Hardware pending. |
+| T85 Stop Sending — RECEIVE button | PASS (software/mock). RECEIVE during SEND → `RC` for Baudot/ASCII/Morse (`_on_screen_receive` → `_on_screen_send(False)`); AMTOR has no RECEIVE button (use Clear TX). |
+| AMTOR Clear TX bug | `_on_clear_tx()` skipped `AM` because `_send_active` is never set for AMTOR (ARQ TX is CONNECTED-triggered, no SEND button). Fix: send `AM` unconditionally for AMTOR ARQ/FEC; keep the `_send_active` guard for the button-driven modes. |
+| Paket 3 complete | RC / AM / none verified for every mode. TxController cycle (Paket 1 rename, 2a Morse, 2b AMTOR, 3 Stop) closed. |
+
+**Verification:** 70 unit tests pass; `main_window.py` compiles. Stop-command
+decision matrix confirmed headless — AMTOR ARQ/FEC → `AM` even with
+`_send_active=False`; Baudot/Morse idle Clear TX → no command; Packet/PACTOR →
+none. Live-GUI click + hardware re-test (AMTOR flush, Morse RC-regression) pending.
 
 ---
 
