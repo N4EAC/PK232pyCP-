@@ -57,7 +57,7 @@ from PyQt6.QtWidgets import (
 
 from .opmode_rtty_base import (
     MacroStore, MacroEditDialog,
-    make_toggle_button, add_hline,
+    make_toggle_button, make_help_button, add_hline,
     style_rx_widget, style_tx_widget,
     BTN_W, SPACING, MACRO_COUNT,
 )
@@ -266,6 +266,7 @@ class PacketBaseScreen(QWidget):
 
     MODE_TITLE      = "Packet"
     MODE_SUFFIX     = ""
+    HELP_TOPIC      = "packet"   # HF → "packet", VHF overrides to "vhf"
     HBAUD_VALUES    = ["300", "1200"]
     HBAUD_DEFAULT   = "300"
     MONITOR_DEFAULT = "4"
@@ -394,6 +395,7 @@ class PacketBaseScreen(QWidget):
         self.lbl_utc.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._update_utc()
         title_row.addWidget(self.lbl_utc)
+        title_row.addWidget(make_help_button(self.HELP_TOPIC))
         root.addLayout(title_row)
 
         add_hline(root)
@@ -483,9 +485,9 @@ class PacketBaseScreen(QWidget):
         )
         action_row.addWidget(self.btn_maildrop)
 
-        # APRS decode toggle — visible only in VHFPacketScreen.
+        # APRS decode toggle — visible on any APRS_CAPABLE screen (HF + VHF).
         # getattr safe default: base class has no APRS_CAPABLE;
-        # VHFPacketScreen sets it True.
+        # HFPacketScreen and VHFPacketScreen both set it True.
         self.btn_aprs = _no_focus_btn("APRS", BTN_W)
         self.btn_aprs.setCheckable(True)
         self.btn_aprs.setStyleSheet(_STYLE_APRS_OFF)
@@ -747,9 +749,13 @@ class HFPacketScreen(PacketBaseScreen):
         MN Y   — Monitor ON
     """
     MODE_TITLE      = "HF Packet"
+    HELP_TOPIC      = "packet"
     HBAUD_VALUES    = ["300", "1200"]
     HBAUD_DEFAULT   = "300"
     MONITOR_DEFAULT = "4"
+    # APRS exists on HF too (e.g. 10.151 MHz / 30 m), so the HF screen also
+    # gets the APRS decode button + colour-coded data cards (same as VHF).
+    APRS_CAPABLE    = True   # enables APRS decode button
 
 
 class VHFPacketScreen(PacketBaseScreen):
@@ -764,6 +770,7 @@ class VHFPacketScreen(PacketBaseScreen):
         MN Y    — Monitor ON
     """
     MODE_TITLE      = "VHF Packet"
+    HELP_TOPIC      = "vhf"
     HBAUD_VALUES    = ["1200", "9600"]
     HBAUD_DEFAULT   = "1200"
     MONITOR_DEFAULT = "4"
