@@ -272,6 +272,27 @@ class MainWindow(QMainWindow):
         act_about.triggered.connect(self._on_about)
         cfg_menu.addAction(act_about)
 
+        # ── Help menu ─────────────────────────────────────────────────────────
+        help_menu = mb.addMenu("&Help")
+
+        act_help_contents = QAction("&Contents", self)
+        act_help_contents.setShortcut("F1")
+        act_help_contents.setStatusTip("Open the PK232PY help (table of contents)")
+        act_help_contents.triggered.connect(self._on_help_contents)
+        help_menu.addAction(act_help_contents)
+
+        help_menu.addSeparator()
+
+        # Reuse the existing About handler — same dialog as Configure → About.
+        act_help_about = QAction("&About PK232PY...", self)
+        act_help_about.triggered.connect(self._on_about)
+        help_menu.addAction(act_help_about)
+
+    def _on_help_contents(self) -> None:
+        """Open the help viewer at the top-level index page (Help → Contents)."""
+        from pk232py.ui.screens.help_viewer import show_help
+        show_help("index", parent=self)
+
     def _build_toolbar(self) -> None:
         # ── Row 1: Connection controls ───────────────────────────────────────
         tb = QToolBar("Main", self)
