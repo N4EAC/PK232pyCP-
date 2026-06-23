@@ -40,7 +40,7 @@ from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QFont, QColor
 
 from .opmode_rtty_base import (
-    make_toggle_button, add_hline, apply_app_style,
+    make_toggle_button, make_help_button, add_hline, apply_app_style,
     style_rx_widget,
     BTN_W, SPACING,
 )
@@ -140,6 +140,7 @@ class SignalScreen(QWidget):
         self.lbl_utc.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._update_utc()
         title_row.addWidget(self.lbl_utc)
+        title_row.addWidget(make_help_button("signal"))
         root.addLayout(title_row)
 
         add_hline(root)
