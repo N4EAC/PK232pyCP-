@@ -95,6 +95,8 @@ class MorseScreen(QWidget):
     clear_tx_req = pyqtSignal()   # emitted by the "Clear TX" button
     clear_rx_req = pyqtSignal()   # emitted by the "Clear RX" button
 
+    HELP_TOPIC = "morse"   # F1 / ? button → help_morse.md
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._macro_store = MacroStore()
