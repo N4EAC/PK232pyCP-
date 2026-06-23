@@ -118,12 +118,33 @@ Kein neuer "Stop TX"-Button nötig — die vorhandenen Pfade decken alle Modes a
 - Help → Contents (F1) in the main menu: ✅
 - Internal topic-link handler (`_on_link_clicked`): ✅
 - APRS on HF Packet screen: ✅ `APRS_CAPABLE = True` in `HFPacketScreen`.
-- **Open:**
+- **Bugfix-Sprint 2026-06-23 — all closed:**
+  - ❌→✅ Dead `controls` anchor: `help_controls.md` created,
+    `HELP_TOPICS["controls"]` re-pointed at it (was the dead
+    `help_baudot.md#control-characters`).
+  - ⚠️→✅ Missing tooltips: `btn_wordout` (Morse), `btn_hold` +
+    `btn_pactor_listen` (AMTOR).
+  - ⚠️→✅ Status-bar tooltips: Port / Baud / Mode / UTC.
+  - ⚠️→✅ Dead-code `TNCConfigDialog`: `dialogs/tnc_config.py` deleted,
+    `dialogs/__init__.py` + `check_repo.sh` references cleaned.
+- **Content correction (done in the same sprint):** `help_controls.md` lists
+  ONLY `[^D]` (Ctrl-D) and `[^T:n]` (Ctrl-T) — the only typeable TX control
+  markers. Ctrl-E (WRU) / Ctrl-B (AAB) were dropped from the draft: they do NOT
+  exist as TX control characters in PK232PY, only as TNC parameters
+  (auto-answerback) in `params_baudot` / `params_amtor`.
+- **New cleanup item (not Beta-critical):**
+  - 🧹 `main_window.py:4170–4191`: appended §10 corruption artefact — a
+    mangled `tnc_config_dialog.py` fragment (copyright + module docstring with
+    mojibake), a functionless no-op string. No duplicate `class` def, no defect.
+    Remove the lines when convenient (one commit).
+- **Open (v0.2, unchanged):**
   - `help_amtor.md` proof-read (CC re-authored vs. approved chat version).
-  - Keyboard Shortcuts / Control Characters / Macros are currently anchors in
-    `help_baudot.md` — split into own `help_shortcuts.md` / `help_controls.md`
-    (and `help_macros.md`) as a v0.2 item.
-  - Add Help buttons to further dialogs (TNC Config, etc.).
+  - Keyboard Shortcuts / Macros still anchors in `help_baudot.md` — own
+    `help_shortcuts.md` / `help_macros.md` (controls already split out).
+  - Add Help buttons to Params / Config / Appearance dialogs.
+  - Context-sensitive F1 (topic = active screen instead of always `index`).
+  - Getting-Started first-run dialog; Verbose-terminal help; `QWhatsThis`
+    (right-click); tidy the unused `rbaud` anchor.
 
 ### TX_STATE_MACHINE.md §8 — Control Characters update
 - Update §8 table: `[^T:n]` als implemented eintragen
@@ -217,7 +238,29 @@ topic = `index`; clicking `[AMTOR](amtor)` / `[VHF](vhf)` switches the page; HF
 and VHF Packet both expose `btn_aprs` with `APRS_CAPABLE = True`.
 
 **Open:** `help_amtor.md` proof-read (CC re-authored vs. approved chat version);
-own `help_shortcuts.md` / `help_controls.md` files instead of anchors (v0.2).
+own `help_shortcuts.md` / `help_macros.md` files instead of anchors (v0.2).
+
+---
+
+## Completed (2026-06-23 — Help-Bugfix-Sprint)
+
+| Item | Notes |
+|------|-------|
+| `help_controls.md` | New file; documents ONLY `[^D]` (Ctrl-D) + `[^T:n]` (Ctrl-T) — verified against `TxInputWidget` (`opmode_rtty_base.py:389–447`). Ctrl-E (WRU)/Ctrl-B (AAB) dropped: not typeable TX control chars, only TNC params. |
+| `controls` anchor fix | `HELP_TOPICS["controls"]` → `help_controls.md` (was the dead `help_baudot.md#control-characters`). No more dead internal links. |
+| 3 tooltips | `btn_wordout` (Morse), `btn_hold` + `btn_pactor_listen` (AMTOR) added to `tooltips.py`. |
+| 4 status-bar tooltips | `_sb_port` / `_sb_baud` / `_sb_mode` / `_sb_time` (`main_window.py:716–733`). |
+| Dead-code `TNCConfigDialog` | `dialogs/tnc_config.py` deleted (−1 Python file); `dialogs/__init__.py` import + `__all__` and `check_repo.sh` entry removed. Active dialog stays `ui/tnc_config_dialog.py::TncConfigDialog`. grep `TNCConfigDialog` = 0 refs. |
+
+**Verification:** 70 unit tests pass; sources export = 72 Python (−1) + 11 help
+(+1) = 83. Headless smoke test: `controls` resolves to `help_controls.md` and
+the link click switches topic; `btn_wordout`/`btn_hold`/`btn_pactor_listen`
+tooltips non-empty; `dialogs` package imports without `TNCConfigDialog`.
+
+**New finding (not fixed — out of scope):** 🧹 `main_window.py:4170–4191` is an
+appended §10 corruption artefact (mangled `tnc_config_dialog.py` docstring
+fragment, mojibake). It is a functionless no-op string — no duplicate `class`
+def, no defect. Remove when convenient.
 
 ---
 
