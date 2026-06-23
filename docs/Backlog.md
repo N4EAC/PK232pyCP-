@@ -105,13 +105,25 @@ Kein neuer "Stop TX"-Button nötig — die vorhandenen Pfade decken alle Modes a
   Hardware-Verifikation (AMTOR `AM`-Flush, Morse `RC`-Regression) ausstehend.
 - **TxController-Zyklus Paket 1–3 abgeschlossen.**
 
-### Help system — ausdifferenzieren
-- `help_baudot.md` exists as one large file
-- Split into topic-specific files as needed:
-  - `help_macros.md`
-  - `help_shortcuts.md`
-  - `help_ctrl_chars.md`
-- Add Help buttons to further dialogs (TNC Config, etc.)
+### Help system — ✅ DONE (2026-06-22 — Help-System-Sprint)
+- `help_viewer.py` + `HelpViewer` + `show_help()` + `HELP_TOPICS`: ✅ complete
+  (all modes + common topics, default `index`, internal topic-link navigation).
+- `help_index.md` (top-level Contents page): ✅ created, approved.
+- `help_amtor.md`: ✅ CC re-authored — **proof-read pending** (CC version vs.
+  approved chat version).
+- `help_baudot/ascii/morse/pactor/packet/navtex/fax/signal.md`: ✅ all created,
+  approved (OE3GAS review 2026-06-22).
+- Help button (`?`) on all 10 screens: ✅ `make_help_button()` in
+  `opmode_rtty_base.py`.
+- Help → Contents (F1) in the main menu: ✅
+- Internal topic-link handler (`_on_link_clicked`): ✅
+- APRS on HF Packet screen: ✅ `APRS_CAPABLE = True` in `HFPacketScreen`.
+- **Open:**
+  - `help_amtor.md` proof-read (CC re-authored vs. approved chat version).
+  - Keyboard Shortcuts / Control Characters / Macros are currently anchors in
+    `help_baudot.md` — split into own `help_shortcuts.md` / `help_controls.md`
+    (and `help_macros.md`) as a v0.2 item.
+  - Add Help buttons to further dialogs (TNC Config, etc.).
 
 ### TX_STATE_MACHINE.md §8 — Control Characters update
 - Update §8 table: `[^T:n]` als implemented eintragen
@@ -185,6 +197,27 @@ AMTOR nutzt TxController. TX startet bei ARQ CONNECTED
 (offscreen Qt) instantiation of every screen confirmed each representative
 tooltip applies, including the collision overrides (PACTOR connect, FAX rxrev/
 lock, MHEARD clear) vs the global defaults (Packet connect = AX.25).
+
+---
+
+## Completed (2026-06-22 — Help-System-Sprint)
+
+| Item | Notes |
+|------|-------|
+| `help_viewer.py` | `HELP_TOPICS` for all modes + common topics; default topic `index`; internal topic switch via `anchorClicked` (`setOpenLinks(False)` → `_on_link_clicked` branches on URL scheme). |
+| 10 help files | `index` + 9 modes (`amtor/baudot/ascii/morse/pactor/packet/navtex/fax/signal`); OE3GAS-reviewed. `vhf` → `help_packet.md` (shared file, no duplication). `help_index.md` + `help_amtor.md` newly created. |
+| Help button | `make_help_button()` factory in `opmode_rtty_base.py`; `?` button in the title row of all 10 screens (RttyBaseScreen covers Baudot+ASCII; Packet uses `HELP_TOPIC` so HF→`packet`, VHF→`vhf`). |
+| Help menu | `MainWindow` `&Help` menu: Contents (F1 → `show_help("index")`) + About (reuses `_on_about`). |
+| APRS on HF Packet | `APRS_CAPABLE = True` in `HFPacketScreen` — one line. Decode logic already mode-agnostic (`_is_packet` matches any `PacketBaseScreen`; `HFPacketMode` already calls `on_monitor_frame`), so `packet_hf.py` unchanged. |
+| Morse toggle buttons | grep-confirmed: `btn_rxrev`/`btn_txrev`/`btn_usos`/`btn_wideshft` do **not** exist in `morse_screen.py` — no removal needed. |
+
+**Verification:** 70 unit tests pass; sources export = 73 Python + 10 help
+files. Headless (offscreen Qt) smoke test: all 10 screens instantiate; default
+topic = `index`; clicking `[AMTOR](amtor)` / `[VHF](vhf)` switches the page; HF
+and VHF Packet both expose `btn_aprs` with `APRS_CAPABLE = True`.
+
+**Open:** `help_amtor.md` proof-read (CC re-authored vs. approved chat version);
+own `help_shortcuts.md` / `help_controls.md` files instead of anchors (v0.2).
 
 ---
 
