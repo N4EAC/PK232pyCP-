@@ -1,166 +1,120 @@
-# PK232PY — Baudot RTTY Help
+# Baudot RTTY
 
-## Overview
+Baudot RTTY (Radio TeleTYpe) is the oldest digital mode supported by the
+PK-232MBX. It uses the ITA-2 (International Telegraph Alphabet No. 2)
+character set — a 5-bit code with two shift states (letters and figures)
+transmitted as FSK (Frequency Shift Keying).
 
-PK232PY controls the AEA PK-232MBX multimode TNC in Host Mode.
-The Baudot RTTY screen provides full TX/RX capability for ITA-2 Baudot teleprinter operation.
-
----
-
-## Screen Layout
-
-```
-┌─────────────────────────────────────────────────────┐
-│  Send [ALT+X]          │  Receive [ALT+R]           │
-├─────────────────────────────────────────────────────┤
-│  Switch figs │ Switch char │ Wide Shift │ RxRev ... │
-├─────────────────────────────────────────────────────┤
-│                                                     │
-│  RX Window  (received text appears here)            │
-│                                                     │
-├─────────────────────────────────────────────────────┤
-│  TX Window  (type here)                             │
-├─────────────────────────────────────────────────────┤
-│  Macro 1 │ Macro 2 │ ... │ Clear TX │ Edit Macros  │
-└─────────────────────────────────────────────────────┘
-```
+Typical use: amateur radio RTTY contests, DX, HF bulletin stations.
 
 ---
 
-## SEND / RECEIVE
+## Before You Start
 
-| Button | Shortcut | Function |
-|--------|----------|----------|
-| **Send** | `ALT+X` | PTT on, TNC starts DIDDLE, queued text is transmitted |
-| **Receive** | `ALT+R` | PTT off, TNC returns to receive mode |
+Set the receive baud rate (**RBAUD**) to match the station you want to
+receive. The most common value is **45 Bd** (standard amateur RTTY). European
+stations often use **50 Bd**. The TX speed is independent and set via
+**MSPEED** in Parameters → Baudot Parameters.
 
-**Colour coding in TX window:**
-- **Yellow** — typed but not yet sent
-- **Black on yellow (inverse)** — sent and confirmed by TNC (DATA_ACK received)
-
-**Colour coding in RX window:**
-- **Blue** — received from the air
-- **Amber** — own transmitted text (confirmed sent)
+Check signal polarity: if received text is completely garbled (all wrong
+characters), try toggling **RXREV**.
 
 ---
 
-## Typing and Editing
+## Receiving
 
-Text can be typed at any time — in RECEIVE mode as preparation,
-or during SEND for live transmission.
+Switch to Baudot RTTY from the Mode dropdown. The TNC immediately starts
+decoding any FSK signal on the audio input. Decoded text appears in the
+RX window in blue.
 
-The TX window always has keyboard focus. All keystrokes go directly
-into the TX window — no mouse click required.
-
-**Edit protection:** Characters that have already been sent to the TNC
-(shown in inverse yellow) cannot be deleted or modified.
-Only unsent characters (yellow) can be edited with Backspace.
-
-**TX Buffer:** Maximum 512 characters can be queued at once.
-A warning dialog appears if the limit is reached.
-After sending, the buffer automatically becomes available again.
+Tune the radio until the two audio tones fall within the TNC's passband.
+For standard 170 Hz shift: mark tone ≈ 2125 Hz, space tone ≈ 1955 Hz
+(USB convention). The exact frequencies depend on your radio and TNC
+settings.
 
 ---
 
-## Control Characters
+## Transmitting
 
-Control characters can be inserted into the TX text to automate
-switching between SEND and RECEIVE. They appear as coloured markers
-in the TX window and are **not transmitted over the air**.
+1. Click **SEND** (or press `Alt+X`). The TNC activates PTT.
+2. Type in the TX window. Characters are sent one by one, rate-limited to
+   the configured TX speed.
+3. Click **RECEIVE** (or press `Alt+R`) to drop PTT and return to receive.
 
-| Key | Marker | Colour | Function |
-|-----|--------|--------|----------|
-| `CTRL+D` | `[^D]` | Orange | Switch to RECEIVE when this position is reached during TX |
-| `CTRL+S` | `[^S]` | Blue | Switch to SEND when this position is reached *(planned)* |
-| `CTRL+T` | `[^T:5]` | Purple | Switch to RECEIVE, wait n seconds, then switch back to SEND |
-
-**Example usage with CTRL+D:**
-```
-CQ CQ DE OE3GAS PSE K[^D]
-```
-The TNC transmits up to `[^D]`, then automatically switches to RECEIVE
-so the operator can listen for a reply.
-
-**Deleting control characters:**
-A single `Backspace` deletes the entire marker at once (atomic delete).
+The `[^D]` control character (EOT) can be inserted with `Ctrl-D` in the TX
+window. When the TNC reaches `[^D]`, it sends RC and returns to receive
+automatically — useful for ending a transmission without manually clicking
+RECEIVE.
 
 ---
 
-## RBAUD — Transmission Speed
+## Toggle Buttons
 
-The RBAUD (Receive/Transmit Baud Rate) setting controls the Baudot
-transmission speed. It must match the speed of the station you are
-communicating with.
+| Button | Function |
+|--------|----------|
+| **RXREV** | Swap mark/space tones on receive. Use when received text is garbled. |
+| **TXREV** | Swap mark/space tones on transmit. Use when the other station reports garbled text. |
+| **USOS** | Unshift On Space. Forces a return to letters mode on each space. Prevents the display getting stuck in figures mode after a missed LTRS shift. |
+| **WIDESHFT** | Wide shift (850 Hz) vs. standard shift (170 Hz). Use for older or military stations using wide shift. |
 
-| RBAUD | ms/char | Notes |
-|-------|---------|-------|
-| 45 Baud | 167ms | Standard European RTTY speed |
-| 50 Baud | 150ms | Common international speed |
-| 75 Baud | 100ms | |
-| 100 Baud | 75ms | |
-| 110 Baud | 68ms | US Teletype standard |
-| 150 Baud | 50ms | |
-| 200 Baud | 38ms | |
-| 300 Baud | 25ms | Fast RTTY |
+---
 
-The RBAUD setting affects both the TNC hardware (via RB command)
-and the software TX rate-limiting — characters are sent to the TNC
-at exactly the rate the TNC can transmit them.
+## ITA-2 Shift Buttons
+
+- **Switch FIGS**: force a shift to figures/numbers mode.
+- **Switch LTRS**: force a shift back to letters mode.
+
+Use these if the display gets stuck showing numbers when it should show
+letters, or vice versa.
 
 ---
 
 ## Macros
 
-Six macros are available for frequently used text (callsign, CQ calls, etc.).
+Up to 6 macros can be stored for frequently used text (your callsign, CQ
+call, signal report, etc.). Click a macro button to send the stored text
+immediately. Click **Edit Macros** to define the macro names and texts.
 
-- Click a **Macro button** to insert the macro text into the TX window
-- Macros work in both RECEIVE and SEND mode
-- Click **Edit Macros** to edit macro names and texts
-- Macros are saved to `Macro.txt` in the program directory
-
-Control characters (`[^D]`, `[^T:n]`) can also be used in
-macro texts to automate TX/RX switching.
-
-**Macro text limits:** Name max. 10 characters, text max. 200 characters.
+Macros support the `[^D]` EOT marker — for example a CQ macro that ends
+with `[^D]` will transmit the CQ call and then automatically return to
+receive.
 
 ---
 
 ## Keyboard Shortcuts
 
-| Shortcut | Function |
-|----------|----------|
-| `ALT+X` | Switch to SEND |
-| `ALT+R` | Switch to RECEIVE |
-| `CTRL+D` | Insert `[^D]` EOT marker (auto-switch to RECEIVE) |
-| `CTRL+T` | Insert `[^T:n]` timed marker (RECEIVE n seconds, then auto-SEND) |
-| `CTRL+V` | Paste text from clipboard into TX window |
-| `Backspace` | Delete last unsent character (or entire control marker) |
+| Shortcut | Action |
+|----------|--------|
+| `Alt+X` | Toggle SEND |
+| `Alt+R` | Toggle RECEIVE |
+| `Ctrl-D` | Insert EOT marker `[^D]` |
+| `Ctrl-T` | Insert timed pause marker `[^T:n]` (n = seconds) |
 
 ---
 
-## Mode Buttons (Row 2)
+## Troubleshooting
 
-| Button | TNC Command | Function |
-|--------|------------|----------|
-| Switch figs | SF | Switch TNC to figures shift |
-| Switch char | SC | Switch TNC to letters shift |
-| Wide Shift | WS toggle | Toggle wide/narrow frequency shift |
-| RxRev | RR toggle | Reverse receive mark/space polarity |
-| TxRev | TR toggle | Reverse transmit mark/space polarity |
-| 5Bit | 5B toggle | 5-bit Baudot mode |
-| 6Bit | 6B toggle | 6-bit extended Baudot mode |
-| EAS | EAS toggle | EAS (Extended Alphabet Shift) mode |
+**Received text is completely wrong characters.**
+Toggle **RXREV** — the signal polarity is inverted.
 
----
+**Received text shows figures where letters should be.**
+The ITA-2 shift state is stuck in FIGS. Enable **USOS** (Unshift On Space)
+to recover automatically, or click **Switch LTRS** to force a shift.
 
-## Tips for Operation
+**TX is active but nothing is being sent.**
+Check that **MSPEED** is set correctly in Parameters → Baudot Parameters.
+Also verify that PTT is connected (radio should show TX).
 
-- **Before calling CQ:** Set RBAUD to match your intended speed (45 or 50 Baud for most European contacts)
-- **Pre-type your CQ:** Type the full CQ call ending with `[^D]` while in RECEIVE, then press SEND — the TNC will transmit and automatically return to RECEIVE
-- **Timed CQ loop:** Use `[^T:n]` to listen for n seconds and automatically resume sending — e.g. `CQ DE OE3GAS K[^D][^T:5]` transmits the CQ, listens 5 seconds, then keys up again
-- **Monitor your own signal:** The RX window shows your transmitted text in amber after TNC confirmation — if characters are missing, check the RBAUD setting
-- **Buffer management:** For long texts, use CTRL+D markers to break transmission into segments with listening pauses
+**The TX window is empty but the TNC keeps transmitting.**
+Click **Clear TX** — this sends RC to the TNC and flushes its internal
+buffer. The RECEIVE button alone does not flush the TNC buffer if characters
+were already sent to it.
 
 ---
 
-*PK232PY v0.1 | OE3GAS | AEA PK-232MBX Host Mode*
+## See Also
+
+- [ASCII RTTY](ascii) — 7-bit ASCII variant
+- [Keyboard Shortcuts](shortcuts)
+- [Macros](macros)
+- [Control Characters](controls)
