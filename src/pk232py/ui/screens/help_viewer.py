@@ -37,11 +37,11 @@ import re
 import logging
 
 from PyQt6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout,
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout,
     QPushButton, QTextBrowser, QLabel, QComboBox,
 )
 from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QFont, QDesktopServices
+from PyQt6.QtGui import QColor, QFont, QDesktopServices, QPalette
 
 logger = logging.getLogger(__name__)
 
@@ -85,8 +85,37 @@ def _find_help_file(filename: str) -> str | None:
 # Markdown → HTML converter
 # ---------------------------------------------------------------------------
 
-def _md_to_html(md_text: str) -> str:
-    """Convert Markdown to HTML.
+def _palette_colors() -> dict[str, str]:
+    """Derive the help-page CSS colours from the current QApplication palette.
+
+    Read at render time, so the help page matches whatever theme is active
+    (dark, mono/light, retro, or the native Air palette). Reopening the viewer
+    after a theme switch picks up the new colours automatically.
+    """
+    pal = QApplication.instance().palette()
+    R = QPalette.ColorRole
+    base = pal.color(R.Base)
+    text = pal.color(R.Text)
+    accent = pal.color(R.Link)
+    alt = pal.color(R.AlternateBase)
+
+    def blend(a: QColor, b: QColor, t: float) -> QColor:
+        return QColor(round(a.red() * (1 - t) + b.red() * t),
+                      round(a.green() * (1 - t) + b.green() * t),
+                      round(a.blue() * (1 - t) + b.blue() * t))
+
+    return {
+        "bg":     base.name(),
+        "fg":     text.name(),
+        "head":   accent.name(),
+        "alt":    alt.name(),
+        "border": blend(text, base, 0.65).name(),   # subtle line colour
+        "muted":  blend(text, base, 0.35).name(),    # blockquote / dim text
+    }
+
+
+def _md_to_html(md_text: str, colors: dict[str, str] | None = None) -> str:
+    """Convert Markdown to HTML, styled from the active palette.
 
     Tries the 'markdown' package first (pip install markdown).
     Falls back to a simple built-in converter if not available.
@@ -100,7 +129,9 @@ def _md_to_html(md_text: str) -> str:
     except ImportError:
         html = _simple_md_to_html(md_text)
 
-    # Wrap in styled HTML document
+    c = colors or _palette_colors()
+
+    # Wrap in a palette-driven HTML document (no hardcoded dark colours).
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -109,34 +140,34 @@ def _md_to_html(md_text: str) -> str:
   body {{
     font-family: 'Segoe UI', Arial, sans-serif;
     font-size: 13px;
-    background-color: #1e2830;
-    color: #d0e4f4;
+    background-color: {c['bg']};
+    color: {c['fg']};
     margin: 16px;
     line-height: 1.5;
   }}
-  h1 {{ color: #88ccff; font-size: 18px; border-bottom: 1px solid #334455; padding-bottom: 4px; }}
-  h2 {{ color: #88ccff; font-size: 15px; margin-top: 20px; border-bottom: 1px solid #334455; padding-bottom: 2px; }}
-  h3 {{ color: #aaddff; font-size: 13px; margin-top: 14px; }}
+  h1 {{ color: {c['head']}; font-size: 18px; border-bottom: 1px solid {c['border']}; padding-bottom: 4px; }}
+  h2 {{ color: {c['head']}; font-size: 15px; margin-top: 20px; border-bottom: 1px solid {c['border']}; padding-bottom: 2px; }}
+  h3 {{ color: {c['head']}; font-size: 13px; margin-top: 14px; }}
   table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
-  th {{ background-color: #2a3a4a; color: #88ccff; padding: 4px 8px;
-        border: 1px solid #334455; text-align: left; }}
-  td {{ padding: 4px 8px; border: 1px solid #334455; }}
-  tr:nth-child(even) {{ background-color: #232d37; }}
-  code {{ background-color: #2a3a4a; color: #ffee88;
+  th {{ background-color: {c['alt']}; color: {c['head']}; padding: 4px 8px;
+        border: 1px solid {c['border']}; text-align: left; }}
+  td {{ padding: 4px 8px; border: 1px solid {c['border']}; }}
+  tr:nth-child(even) {{ background-color: {c['alt']}; }}
+  code {{ background-color: {c['alt']}; color: {c['fg']};
           padding: 1px 4px; border-radius: 3px;
           font-family: 'Courier New', monospace; font-size: 12px; }}
-  pre  {{ background-color: #2a3a4a; color: #ffee88; padding: 8px;
+  pre  {{ background-color: {c['alt']}; color: {c['fg']}; padding: 8px;
           border-radius: 4px; font-family: 'Courier New', monospace;
           font-size: 12px; overflow-x: auto; }}
   pre code {{ background: none; padding: 0; }}
-  hr   {{ border: none; border-top: 1px solid #334455; margin: 16px 0; }}
-  a    {{ color: #88ccff; }}
-  strong {{ color: #ffffff; }}
-  em   {{ color: #aaddff; }}
+  hr   {{ border: none; border-top: 1px solid {c['border']}; margin: 16px 0; }}
+  a    {{ color: {c['head']}; }}
+  strong {{ color: {c['fg']}; }}
+  em   {{ color: {c['head']}; }}
   ul, ol {{ margin: 4px 0; padding-left: 24px; }}
   li   {{ margin: 2px 0; }}
-  blockquote {{ border-left: 3px solid #445566; margin: 8px 0;
-                padding: 4px 12px; color: #aabbcc; }}
+  blockquote {{ border-left: 3px solid {c['border']}; margin: 8px 0;
+                padding: 4px 12px; color: {c['muted']}; }}
 </style>
 </head>
 <body>
@@ -345,8 +376,14 @@ class HelpViewer(QDialog):
             self._browser.setHtml(f"<p>Error reading help file: {e}</p>")
             return
 
-        html = _md_to_html(md_text)
-        self._browser.setHtml(html)
+        colors = _palette_colors()
+        # Match the widget background to the page so the body margin has no
+        # mismatched border (palette-driven, like the rendered HTML).
+        self._browser.setStyleSheet(
+            f"QTextBrowser {{ background: {colors['bg']}; color: {colors['fg']};"
+            f" border: none; }}"
+        )
+        self._browser.setHtml(_md_to_html(md_text, colors))
 
         # Scroll to anchor if specified
         if anchor:
