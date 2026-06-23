@@ -81,10 +81,13 @@ THEMES: dict[str, Theme] = {
         font_family="Cascadia Mono SemiBold", font_size=14,
         bg="#1e1e1e", fg="#ffffff", system_palette=False,
     ),
+    # Mono = classic black/white/grey terminal — deliberately NO colour.
+    # fg is light grey (not pure white) so it is a touch softer on the eyes;
+    # build_palette derives every other role as a grey shade of bg/fg.
     "mono": Theme(
         key="mono", name="Mono",
         font_family="Courier New", font_size=14,
-        bg="#000000", fg="#33ff33", system_palette=False,
+        bg="#000000", fg="#e0e0e0", system_palette=False,
     ),
     "retro": Theme(
         key="retro", name="Retro",
