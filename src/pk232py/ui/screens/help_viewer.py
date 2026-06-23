@@ -67,7 +67,7 @@ HELP_TOPICS: dict[str, tuple[str, str]] = {
     # common topics (anchors inside help_baudot.md)
     "shortcuts": ("help_baudot.md", "keyboard-shortcuts"),
     "macros":    ("help_baudot.md", "macros"),
-    "controls":  ("help_baudot.md", "control-characters"),
+    "controls":  ("help_controls.md", ""),
     "rbaud":     ("help_baudot.md", "rbaud--transmission-speed"),
 }
 
