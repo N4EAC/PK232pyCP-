@@ -284,8 +284,11 @@ class MainWindow(QMainWindow):
         # cannot render bold text natively, so we embed a styled QLabel via a
         # QWidgetAction. palette(text) keeps it readable under every theme.
         theme_header_lbl = QLabel("Select Theme")
+        # Neutral mid-grey: readable on any menu background (dark or light) and
+        # independent of the app palette, which a Qt menu does not necessarily
+        # follow. palette(text) was invisible on the dark menu chrome.
         theme_header_lbl.setStyleSheet(
-            "font-weight: bold; padding: 4px 20px; color: palette(text);"
+            "font-weight: bold; padding: 4px 20px; color: #808080;"
         )
         theme_header_lbl.setEnabled(False)
         theme_header = QWidgetAction(self)
