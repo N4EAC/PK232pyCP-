@@ -46,6 +46,14 @@ python -m nuitka `
     --show-progress `
     src/pk232py/__main__.py
 
+# $ErrorActionPreference="Stop" does NOT abort on a failed native process —
+# it only governs PowerShell cmdlets. Check Nuitka's exit code explicitly so a
+# failed build does not fall through to the "Build complete" message.
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "Nuitka build failed (exit code $LASTEXITCODE)"
+    exit 1
+}
+
 Write-Host ""
 $Exe = Join-Path $DistDir "pk232py.exe"
 Write-Host "Build complete: $Exe"
