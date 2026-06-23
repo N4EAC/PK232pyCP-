@@ -202,11 +202,17 @@ class MailDropConfig:
 
 @dataclass
 class AppearanceConfig:
-    """Display appearance settings."""
-    font_family:  str  = "Courier New"
-    font_size:    int  = 10
+    """Display appearance settings.
+
+    ``theme`` is the preset key ("dark"/"mono"/"retro"/"air") or "custom" when
+    the user has hand-tuned font/colours in the Font & Colors dialog. The
+    defaults match the Dark preset (see ui/themes.py THEMES["dark"]).
+    """
+    theme:        str  = "dark"
+    font_family:  str  = "Cascadia Mono SemiBold"
+    font_size:    int  = 14
     bg_color:     str  = "#1e1e1e"   # RX/TX display background
-    fg_color:     str  = "#d4d4d4"   # RX/TX display foreground
+    fg_color:     str  = "#ffffff"   # RX/TX display foreground
 
 
 @dataclass
@@ -541,6 +547,7 @@ class ConfigManager:
             return
         s = self._config["Appearance"]
         a = self.app.appearance
+        a.theme       = s.get("theme",       a.theme)
         a.font_family = s.get("font_family", a.font_family)
         a.font_size   = s.getint("font_size", a.font_size)
         a.bg_color    = s.get("bg_color",    a.bg_color)
@@ -549,6 +556,7 @@ class ConfigManager:
     def _build_appearance(self) -> None:
         a = self.app.appearance
         self._config["Appearance"] = {
+            "theme":       a.theme,
             "font_family": a.font_family,
             "font_size":   str(a.font_size),
             "bg_color":    a.bg_color,
