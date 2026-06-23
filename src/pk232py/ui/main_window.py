@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QFont
+from PyQt6.QtGui import QAction, QActionGroup, QFont
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
@@ -119,6 +119,14 @@ class MainWindow(QMainWindow):
         # When APRS toggle fires, _packet_rx_redraw() re-renders all entries.
         self._packet_raw_frames: list[tuple[str, str]] = []
         self._packet_aprs_active: bool = False
+
+        # Apply the saved theme's palette + style BEFORE building any widgets,
+        # so every widget inherits the right palette at construction time.
+        # (A palette set afterwards does not reliably re-style already-built
+        # children, and a style switch mid-life is more disruptive.) Capture the
+        # native style name first so the Air theme can restore it.
+        self._system_style_name = QApplication.instance().style().objectName()
+        self._apply_palette()
 
         self._build_ui()
         self._connect_signals()
@@ -265,6 +273,29 @@ class MainWindow(QMainWindow):
         act_font.setStatusTip("Set display font, size and colors")
         act_font.triggered.connect(self._on_appearance)
         appear_menu.addAction(act_font)
+
+        appear_menu.addSeparator()
+
+        # Theme presets — checkable + mutually exclusive (QActionGroup).
+        # The active theme shows a check mark; clicking one applies it live and
+        # persists it. See _on_theme_selected() / _sync_theme_checks().
+        from pk232py.ui.themes import THEMES, THEME_ORDER
+        self._theme_group = QActionGroup(self)
+        # ExclusiveOptional: exactly one preset checked, OR none (when the user
+        # has a "custom" appearance that matches no preset).
+        self._theme_group.setExclusionPolicy(
+            QActionGroup.ExclusionPolicy.ExclusiveOptional
+        )
+        self._theme_actions: dict[str, QAction] = {}
+        for key in THEME_ORDER:
+            theme = THEMES[key]
+            act = QAction(theme.name, self, checkable=True)
+            act.setStatusTip(f"Apply the {theme.name} appearance theme")
+            act.triggered.connect(lambda _checked, k=key: self._on_theme_selected(k))
+            self._theme_group.addAction(act)
+            appear_menu.addAction(act)
+            self._theme_actions[key] = act
+        self._sync_theme_checks()
 
         cfg_menu.addSeparator()
 
@@ -3581,16 +3612,87 @@ class MainWindow(QMainWindow):
             self._opmode_timer.stop()
 
     def _on_appearance(self) -> None:
-        """Open Appearance settings dialog."""
+        """Open Appearance settings dialog (Font & Colors)."""
         dlg = AppearanceDialog(self._app_config.appearance, parent=self)
         if dlg.exec() == AppearanceDialog.DialogCode.Accepted:
+            # Hand-tuned values match no preset → mark theme "custom" (so the
+            # submenu shows no check mark) unless they still equal a preset.
+            self._app_config.appearance.theme = "custom"
             self._config_mgr.save()
             self._apply_appearance()
+            self._sync_theme_checks()
             self._log_monitor("[SYS] Appearance settings updated")
 
-    def _apply_appearance(self) -> None:
-        """Apply appearance settings to all display widgets."""
+    # ------------------------------------------------------------------
+    # Theme system
+    # ------------------------------------------------------------------
+
+    def _current_theme(self):
+        """Return a Theme describing the current appearance config.
+
+        ``air`` → the Air preset (native look). Otherwise a Theme built from the
+        stored font/colours, so it works for the presets AND "custom" alike.
+        """
+        from pk232py.ui.themes import THEMES, Theme
         a = self._app_config.appearance
+        if a.theme == "air":
+            return THEMES["air"]
+        return Theme(
+            key=a.theme, name=a.theme.title(),
+            font_family=a.font_family, font_size=a.font_size,
+            bg=a.bg_color, fg=a.fg_color, system_palette=False,
+        )
+
+    def _apply_palette(self) -> None:
+        """Set the global QPalette + style from the current theme.
+
+        Themed presets (Dark/Mono/Retro) use the Fusion style because the native
+        Windows style ignores ``QPalette.ButtonText`` — OK/Cancel text would be
+        unreadable on a dark button. Air restores the captured native style and
+        its ``standardPalette()`` for a fully native look.
+        """
+        from pk232py.ui.themes import build_palette
+        app = QApplication.instance()
+        if app is None:
+            return
+        pal = build_palette(self._current_theme())
+        if pal is None:                       # Air → native style + palette
+            app.setStyle(self._system_style_name)
+            app.setPalette(app.style().standardPalette())
+        else:                                 # Dark/Mono/Retro → Fusion + palette
+            app.setStyle("Fusion")
+            app.setPalette(pal)
+
+    def _on_theme_selected(self, key: str) -> None:
+        """Apply a theme preset from the submenu — live preview + persisted."""
+        from pk232py.ui.themes import THEMES
+        theme = THEMES.get(key)
+        if theme is None:
+            return
+        a = self._app_config.appearance
+        a.theme       = key
+        a.font_family = theme.font_family
+        a.font_size   = theme.font_size
+        a.bg_color    = theme.bg
+        a.fg_color    = theme.fg
+        self._config_mgr.save()
+        self._apply_appearance()
+        self._sync_theme_checks()
+        self._log_monitor(f"[SYS] Theme → {theme.name}")
+
+    def _sync_theme_checks(self) -> None:
+        """Tick the active preset in the submenu (none when theme == 'custom')."""
+        actions = getattr(self, "_theme_actions", None)
+        if not actions:
+            return
+        current = self._app_config.appearance.theme
+        for k, act in actions.items():
+            act.setChecked(k == current)
+
+    def _apply_appearance(self) -> None:
+        """Apply appearance settings: global palette/style + display widgets."""
+        a = self._app_config.appearance
+        self._apply_palette()   # global QPalette + style (menus, dialogs, buttons)
         font = QFont(a.font_family, a.font_size)
         style_rx = (
             f"background-color:{a.bg_color}; "
