@@ -4166,26 +4166,3 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         logger.debug("Window geometry restored")
-
-
-# === E:\PK232\pk232py_repo\src\pk232py\ui\tnc_config_dialog.py ===
-# pk232py - Modern multimode terminal for AEA PK-232 / PK-232MBX TNC
-# Copyright (C) 2026  OE3GAS  â€”  GPL v2
-"""TNC configuration dialog.
-
-Allows selection of:
-  - Serial port (COM1, /dev/ttyUSB0, â€¦)
-  - Baud rate
-  - Hardware handshake (RTS/CTS)
-  - Host Mode on exit
-  - Fast initialisation
-
-Based on the PCPackRatt "TNC Configuration" dialog
-(see TNC_Config_at_Start.png in project files).
-
-Usage::
-
-    dlg = TncConfigDialog(current_config, parent=self)
-    if dlg.exec() == QDialog.DialogCode.Accepted:
-        config = dlg.get_config()
-"""
