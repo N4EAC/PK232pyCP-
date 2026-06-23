@@ -20,12 +20,12 @@ import logging
 from datetime import datetime, timezone
 
 from PyQt6.QtCore import QEvent, QSettings, Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QActionGroup, QFont
+from PyQt6.QtGui import QAction, QActionGroup, QFont, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox, QHBoxLayout, QLabel, QMainWindow, QMessageBox,
     QPushButton, QSplitter, QStackedWidget, QTextEdit, QToolBar,
-    QVBoxLayout, QWidget,
+    QVBoxLayout, QWidget, QWidgetAction,
 )
 
 from pk232py import __version__
@@ -280,9 +280,16 @@ class MainWindow(QMainWindow):
         # The active theme shows a check mark; clicking one applies it live and
         # persists it. See _on_theme_selected() / _sync_theme_checks().
         from pk232py.ui.themes import THEMES, THEME_ORDER
-        # Non-clickable header above the theme list.
-        theme_header = QAction("— Select Theme —", self)
-        theme_header.setEnabled(False)
+        # Non-clickable bold header above the theme list. A disabled QAction
+        # cannot render bold text natively, so we embed a styled QLabel via a
+        # QWidgetAction. palette(text) keeps it readable under every theme.
+        theme_header_lbl = QLabel("Select Theme")
+        theme_header_lbl.setStyleSheet(
+            "font-weight: bold; padding: 4px 20px; color: palette(text);"
+        )
+        theme_header_lbl.setEnabled(False)
+        theme_header = QWidgetAction(self)
+        theme_header.setDefaultWidget(theme_header_lbl)
         appear_menu.addAction(theme_header)
         appear_menu.addSeparator()
 
@@ -312,8 +319,10 @@ class MainWindow(QMainWindow):
         # ── Help menu ─────────────────────────────────────────────────────────
         help_menu = mb.addMenu("&Help")
 
+        # Menu item always opens the top-level index (Contents). F1 is handled
+        # separately (context-sensitive — see _on_f1) so the menu and the key
+        # can differ; hence NO setShortcut("F1") on this action.
         act_help_contents = QAction("&Contents", self)
-        act_help_contents.setShortcut("F1")
         act_help_contents.setStatusTip("Open the PK232PY help (table of contents)")
         act_help_contents.triggered.connect(self._on_help_contents)
         help_menu.addAction(act_help_contents)
@@ -325,10 +334,30 @@ class MainWindow(QMainWindow):
         act_help_about.triggered.connect(self._on_about)
         help_menu.addAction(act_help_about)
 
+        # F1 = context help for the active opmode screen (NOT the menu's index).
+        self._f1_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F1), self)
+        self._f1_shortcut.activated.connect(self._on_f1)
+
     def _on_help_contents(self) -> None:
         """Open the help viewer at the top-level index page (Help → Contents)."""
         from pk232py.ui.screens.help_viewer import show_help
         show_help("index", parent=self)
+
+    def _on_f1(self) -> None:
+        """F1 → context help for the active opmode screen.
+
+        Falls back to the top-level index when no mode is active (e.g. before
+        connecting, while the verbose terminal / default screen is shown). Each
+        opmode screen carries its topic in a ``HELP_TOPIC`` class attribute —
+        the same key its own ``?`` button uses.
+        """
+        from pk232py.ui.screens.help_viewer import show_help
+        if self._modes.current_mode is None:
+            topic = "index"
+        else:
+            screen = self._opmode_stack.currentWidget()
+            topic = getattr(screen, "HELP_TOPIC", "index")
+        show_help(topic, parent=self)
 
     def _build_toolbar(self) -> None:
         # ── Row 1: Connection controls ───────────────────────────────────────
