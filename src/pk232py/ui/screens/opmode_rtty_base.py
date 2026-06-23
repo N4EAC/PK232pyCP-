@@ -825,32 +825,25 @@ class RttyBaseScreen(QWidget):
 
         macro_row.addStretch()
 
+        # Clear TX / Clear RX / Edit Macros: NO stylesheet → fully palette-
+        # driven (Fusion + the theme QPalette). Hardcoded text colours here
+        # (orange/blue/border-only) were unreadable on the Air/light theme;
+        # the SEND/RECEIVE and toggle buttons keep their semantic colours.
         self.btn_clear_tx = QPushButton("Clear TX")
         self.btn_clear_tx.setFixedWidth(BTN_W)
         self.btn_clear_tx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_clear_tx.setStyleSheet(
-            "QPushButton { border: 1px solid #666; border-radius: 4px;"
-            " padding: 4px; color: #ffaa44; }"
-        )
         self.btn_clear_tx.clicked.connect(self.clear_tx_req.emit)
         macro_row.addWidget(self.btn_clear_tx)
 
         self.btn_clear_rx = QPushButton("Clear RX")
         self.btn_clear_rx.setFixedWidth(BTN_W)
         self.btn_clear_rx.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_clear_rx.setStyleSheet(
-            "QPushButton { border: 1px solid #666; border-radius: 4px;"
-            " padding: 4px; color: #88ccff; }"
-        )
         self.btn_clear_rx.clicked.connect(self.clear_rx_req.emit)
         macro_row.addWidget(self.btn_clear_rx)
 
         self.btn_edit_macros = QPushButton("Edit Macros")
         self.btn_edit_macros.setFixedWidth(BTN_W + 20)
         self.btn_edit_macros.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.btn_edit_macros.setStyleSheet(
-            "QPushButton { border: 1px solid #666; border-radius: 4px; padding: 4px; }"
-        )
         self.btn_edit_macros.clicked.connect(self._on_edit_macros)
         macro_row.addWidget(self.btn_edit_macros)
         root.addLayout(macro_row)
