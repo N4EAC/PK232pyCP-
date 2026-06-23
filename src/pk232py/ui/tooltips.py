@@ -115,6 +115,8 @@ TOOLTIPS: dict[str, str] = {
     "btn_rfec":   "RFEC — receive FEC while in ARQ standby.\nWhen ON, the TNC also decodes FEC/SELFEC broadcasts while waiting for an ARQ connect request.",
     "btn_srxall": "SRxAll — receive all SELFEC frames regardless of SELCAL.\nNormally only SELFEC frames matching your SELCAL are shown. SRxAll disables this filter.",
     "btn_arxtor": "ARXTOR — automatic AMTOR/PACTOR mode detection.\nWhen ON, the TNC automatically recognises and switches between AMTOR and PACTOR modes.\n(Requires PACTOR firmware option.)",
+    "btn_hold":   "HOLD — hold the TX buffer instead of releasing it on changeover.\nKeeps unsent text buffered across an ACHG role swap; release to continue sending.",
+    "btn_pactor_listen": "PACTOR Listen — monitor PACTOR transmissions without connecting.\nAuto-detects and follows a PACTOR signal in listen mode.\n(Requires PACTOR firmware option.)",
 
     # ------------------------------------------------------------------
     # Baudot RTTY / ASCII RTTY
@@ -129,6 +131,7 @@ TOOLTIPS: dict[str, str] = {
     "sb_mweight": "MWEIGHT — dot/dash weight.\nAdjusts the ratio of key-down to key-up time. 50 = standard; >50 = heavier dots/dashes.",
     "sb_mid":     "MID — Morse ID interval in 10-second steps.\n0 = disabled. Example: 30 = every 300 seconds.",
     "btn_lock":   "LOCK — force Morse receive synchronisation.\nOne-shot command: locks the TNC decoder to the incoming signal's timing.",
+    "btn_wordout": "WORDOUT — send whole words instead of character by character.\nThe TNC buffers until a space, then keys the complete word at once.",
 
     # ------------------------------------------------------------------
     # PACTOR (unique attribute names — connect/disconnect/stby in SCREEN_TOOLTIPS)
