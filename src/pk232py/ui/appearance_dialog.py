@@ -74,11 +74,17 @@ class AppearanceDialog(QDialog):
         font_form  = QFormLayout(font_group)
         font_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
 
+        # Show ALL fonts, not just QFontComboBox.MonospacedFonts: that filter
+        # only lists fonts the OS *tagged* as monospaced and hides many
+        # fixed-pitch TTFs (Cascadia Mono, Consolas variants, …). We list
+        # everything and add a hint instead, so no usable font is filtered out.
         self._font_combo = QFontComboBox()
-        self._font_combo.setFontFilters(
-            QFontComboBox.FontFilter.MonospacedFonts
-        )
+        self._font_combo.setFontFilters(QFontComboBox.FontFilter.AllFonts)
         font_form.addRow("Font family:", self._font_combo)
+
+        hint = QLabel("Monospace fonts recommended for aligned columns.")
+        hint.setStyleSheet("color:#888; font-size:8pt;")
+        font_form.addRow("", hint)
 
         self._font_size = QSpinBox()
         self._font_size.setRange(6, 24)
@@ -154,12 +160,18 @@ class AppearanceDialog(QDialog):
         config.fg_color    = self._fg_btn.color()
 
     def _on_reset(self) -> None:
-        """Reset to defaults."""
-        defaults = AppearanceConfig()
-        self._font_combo.setCurrentFont(QFont(defaults.font_family))
-        self._font_size.setValue(defaults.font_size)
-        self._bg_btn.set_color(defaults.bg_color)
-        self._fg_btn.set_color(defaults.fg_color)
+        """Reset to the active theme's preset values (not hardcoded defaults).
+
+        If the config's theme is a known preset, reset to that preset; for
+        "custom" (or an unknown key) fall back to the Dark preset, which also
+        matches AppearanceConfig's field defaults.
+        """
+        from pk232py.ui.themes import THEMES
+        t = THEMES.get(self._config.theme, THEMES["dark"])
+        self._font_combo.setCurrentFont(QFont(t.font_family))
+        self._font_size.setValue(t.font_size)
+        self._bg_btn.set_color(t.bg)
+        self._fg_btn.set_color(t.fg)
         self._update_preview()
 
     def _on_accept(self) -> None:
