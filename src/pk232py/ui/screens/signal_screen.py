@@ -103,6 +103,8 @@ class SignalScreen(QWidget):
     └──────────────────────────────────────────────────────┘
     """
 
+    HELP_TOPIC = "signal"   # F1 / ? button → help_signal.md
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
