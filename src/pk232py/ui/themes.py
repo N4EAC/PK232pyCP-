@@ -81,13 +81,14 @@ THEMES: dict[str, Theme] = {
         font_family="Cascadia Mono SemiBold", font_size=14,
         bg="#1e1e1e", fg="#ffffff", system_palette=False,
     ),
-    # Mono = classic black/white/grey terminal — deliberately NO colour.
-    # fg is light grey (not pure white) so it is a touch softer on the eyes;
-    # build_palette derives every other role as a grey shade of bg/fg.
+    # Mono = classic light paper-white terminal — deliberately NO colour.
+    # White background, near-black text; build_palette derives every other role
+    # as a grey shade of bg/fg (luminance-aware, so the buttons go DARKER than
+    # the white window instead of clamping to white).
     "mono": Theme(
         key="mono", name="Mono",
         font_family="Courier New", font_size=14,
-        bg="#000000", fg="#e0e0e0", system_palette=False,
+        bg="#ffffff", fg="#1a1a1a", system_palette=False,
     ),
     "retro": Theme(
         key="retro", name="Retro",
@@ -133,12 +134,22 @@ def _blend(a: QColor, b: QColor, t: float) -> QColor:
     )
 
 
+def _luma(c: QColor) -> float:
+    """Perceived brightness 0..255 (Rec. 601)."""
+    return 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+
+
 def build_palette(theme: Theme) -> QPalette | None:
     """Return a full custom QPalette for *theme*, or None for a system theme.
 
     None signals the caller to restore the native style + standardPalette()
     (Air). For Dark/Mono/Retro, every ColorRole that Qt-drawn widgets read is
     set explicitly so dialogs, menus and push-buttons are readable.
+
+    Luminance-aware: on a DARK background the derived roles (button, base, …)
+    go *lighter* than the window; on a LIGHT background (e.g. the inverted Mono
+    theme) they go *darker* — otherwise "lighter than white" would clamp to
+    white and the buttons would vanish into the window.
     """
     if theme.system_palette:
         return None
@@ -146,18 +157,27 @@ def build_palette(theme: Theme) -> QPalette | None:
     bg = QColor(theme.bg)
     fg = QColor(theme.fg)
 
-    base      = _shift(bg, -8)      # text-entry background, slightly darker
-    alt_base  = _shift(bg, +6)
-    button    = _shift(bg, +28)     # push-button face, clearly lighter
-    tip_bg    = _shift(bg, +28)
-    highlight = _blend(fg, bg, 0.45)   # selection: accent toward fg
+    if _luma(bg) > 140:               # LIGHT theme → derive darker shades
+        window    = _shift(bg, -12)   # window slightly off-white
+        base      = bg                # inputs = the pure (lightest) bg
+        alt_base  = _shift(bg, -10)
+        button    = _shift(bg, -28)   # push-button face, clearly darker
+        tip_bg    = _shift(bg, -16)
+        highlight = _blend(fg, bg, 0.25)   # selection: dark, toward fg
+    else:                             # DARK theme → derive lighter shades
+        window    = bg
+        base      = _shift(bg, -8)    # text-entry background, slightly darker
+        alt_base  = _shift(bg, +6)
+        button    = _shift(bg, +28)   # push-button face, clearly lighter
+        tip_bg    = _shift(bg, +28)
+        highlight = _blend(fg, bg, 0.45)   # selection: accent toward fg
     disabled  = _blend(fg, bg, 0.55)   # greyed-out text
 
     pal = QPalette()
     R = QPalette.ColorRole
     G = QPalette.ColorGroup
 
-    pal.setColor(R.Window,          bg)
+    pal.setColor(R.Window,          window)
     pal.setColor(R.WindowText,      fg)
     pal.setColor(R.Base,            base)
     pal.setColor(R.AlternateBase,   alt_base)
