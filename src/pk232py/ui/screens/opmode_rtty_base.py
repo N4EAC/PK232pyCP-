@@ -108,6 +108,36 @@ def make_toggle_button(label: str) -> QPushButton:
     return btn
 
 
+def make_help_button(topic: str) -> QPushButton:
+    """Small ``?`` button that opens the help viewer for *topic*.
+
+    One shared factory used by every opmode screen, so the look and the
+    NoFocus behaviour stay identical everywhere.
+
+    Lernmodus
+    ---------
+    - The ``show_help`` import is **lazy** (done inside the click slot, not at
+      module top). ``help_viewer`` lives in the same ``ui/screens`` package and
+      imports screen helpers itself, so a top-level import here could create an
+      import cycle. Importing on click avoids that entirely.
+    - ``NoFocus`` matters: like every other button on these screens, a click on
+      ``?`` must never steal keyboard focus away from the TX window.
+    - ``btn.window()`` is passed as the dialog parent so the modal help viewer
+      centres on the main window and stays on top of it.
+    """
+    btn = QPushButton("?")
+    btn.setFixedWidth(28)
+    btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    btn.setToolTip("Open the help page for this operating mode.")
+
+    def _open() -> None:
+        from .help_viewer import show_help
+        show_help(topic, parent=btn.window())
+
+    btn.clicked.connect(_open)
+    return btn
+
+
 def _apply_toggle_style(btn: QPushButton) -> None:
     if btn.isChecked():
         btn.setStyleSheet(
@@ -596,6 +626,7 @@ class RttyBaseScreen(QWidget):
     """
 
     MODE_TITLE:  str       = "RTTY"
+    HELP_TOPIC:  str       = "baudot"   # overridden by AsciiScreen → "ascii"
     BAUD_LABEL:  str       = "RBAUD (Speed):"
     BAUD_VALUES: list[str] = RBAUD_VALUES
 
@@ -697,6 +728,7 @@ class RttyBaseScreen(QWidget):
         self.lbl_utc.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._update_utc()
         title_row.addWidget(self.lbl_utc)
+        title_row.addWidget(make_help_button(self.HELP_TOPIC))
         root.addLayout(title_row)
 
         add_hline(root)
