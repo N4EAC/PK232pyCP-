@@ -94,6 +94,13 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
 
 ### Open / next sprint
 
+- ~~Help-System — `help_viewer`, Help-Dateien, Help-Buttons~~ ✅ DONE
+  2026-06-22 (Help-System-Sprint; see Backlog.md Completed-Block).
+- ~~APRS auf HF-Packet-Screen~~ ✅ DONE 2026-06-22 (`APRS_CAPABLE = True` in
+  `HFPacketScreen` — eine Zeile, Decode-Logik bereits mode-agnostisch).
+- Offen (Help-System Folge): `help_amtor.md` Gegenlesen (CC-Neufassung vs.
+  freigegebene Chat-Version); eigene `help_shortcuts.md` / `help_controls.md`
+  statt Anchors in `help_baudot.md` (v0.2).
 - Packet hardware re-tests (need a real AX.25 second station): T35/T37
   Connect/Disconnect, T38/T39 mutual exclusion (+interactive mock GUI re-click),
   T41/T42 MHEARD (+live-GUI Refresh click). All software/mock-verified.
@@ -412,7 +419,13 @@ See `Backlog.md` (TxController section) and `TX_STATE_MACHINE.md` for detail.
    `TOOLTIPS` + per-class `SCREEN_TOOLTIPS` overrides; wired into all 10 screens.
    See the tooltip Gotcha under Known Gotchas. Follow-up: T86 PASSALL `PS`/`PX`
    hardware verification.
-8. **Help system** — split `help_baudot.md` into topic files, add Help buttons
+8. ~~**Help system** — split `help_baudot.md` into topic files, add Help buttons~~
+   ✅ DONE 2026-06-22. `help_viewer.py` `HELP_TOPICS` covers all 10 modes +
+   common topics (default `index`, internal topic-link navigation); 10 reviewed
+   help files (`vhf` → `help_packet.md`, shared); `make_help_button()` (`?`) on
+   all 10 screens; Help menu (Contents = F1, About). See the HelpViewer Gotcha.
+   Follow-up: `help_amtor.md` proof-read; `help_shortcuts.md` / `help_controls.md`
+   as own files (v0.2).
 
 ### Before beta
 
@@ -521,6 +534,25 @@ Grows over time.
   PACTOR-firmware-only; if it ever needs a UI control, gate it behind
   `SerialManager.has_pactor` (do not add a bare `btn_mopt` toggle). NB: Morse
   has a `btn_moptt` (MOPTT) — a different button, intentionally not tooltip'd.
+- **HelpViewer internal topic links — URL-scheme detection.** `QTextBrowser`
+  fires `anchorClicked(QUrl)` for every link click (`setOpenLinks(False)`).
+  `_on_link_clicked()` branches on the QUrl:
+  - `url.scheme() == ""` and the path is a key in `HELP_TOPICS` →
+    `_load_topic()` (topic switch — this is what cross-links the help pages).
+  - `#fragment` (same-page anchor) → `scrollToAnchor()`.
+  - `url.scheme()` in (`http`, `https`) → `QDesktopServices.openUrl()` (browser).
+  A Markdown link like `[AMTOR](amtor)` produces a scheme-less QUrl with
+  `path="amtor"`. No base-URL or real file paths needed — `HELP_TOPICS` is the
+  sole indirection layer (so `vhf` and `packet` can both map to
+  `help_packet.md`). Help button factory: `make_help_button()` in
+  `opmode_rtty_base.py`; default topic = `index`.
+- **APRS on HF Packet — `APRS_CAPABLE` flag, not mode logic.** `btn_aprs` lives
+  in `PacketBaseScreen` and its visibility is gated by the `APRS_CAPABLE` class
+  attribute (set `True` on both `HFPacketScreen` and `VHFPacketScreen`). The
+  decode path in `main_window.py` is already mode-agnostic — `_is_packet`
+  matches any `PacketBaseScreen` subclass, and `HFPacketMode` already calls
+  `on_monitor_frame` — so **no change to `packet_hf.py` is needed** to enable
+  APRS on HF; flipping `APRS_CAPABLE = True` is the entire change.
 
 ### FAX (live image decode — implemented 2026-06-18, hardware-verified T82)
 
