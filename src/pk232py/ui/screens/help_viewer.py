@@ -51,7 +51,20 @@ logger = logging.getLogger(__name__)
 
 # Maps topic name → (filename, optional anchor)
 HELP_TOPICS: dict[str, tuple[str, str]] = {
+    # top-level
+    "index":     ("help_index.md",  ""),
+    # modes
+    "amtor":     ("help_amtor.md",  ""),
     "baudot":    ("help_baudot.md", ""),
+    "ascii":     ("help_ascii.md",  ""),
+    "morse":     ("help_morse.md",  ""),
+    "pactor":    ("help_pactor.md", ""),
+    "packet":    ("help_packet.md", ""),
+    "vhf":       ("help_packet.md", ""),   # VHF Packet → same file as HF Packet
+    "navtex":    ("help_navtex.md", ""),
+    "fax":       ("help_fax.md",    ""),
+    "signal":    ("help_signal.md", ""),
+    # common topics (anchors inside help_baudot.md)
     "shortcuts": ("help_baudot.md", "keyboard-shortcuts"),
     "macros":    ("help_baudot.md", "macros"),
     "controls":  ("help_baudot.md", "control-characters"),
@@ -256,7 +269,7 @@ class HelpViewer(QDialog):
         viewer.exec()
     """
 
-    def __init__(self, topic: str = "baudot", parent=None):
+    def __init__(self, topic: str = "index", parent=None):
         super().__init__(parent)
         self.setWindowTitle("PK232PY Help")
         self.setMinimumSize(700, 560)
@@ -356,23 +369,44 @@ class HelpViewer(QDialog):
             self._load_topic(topic)
 
     def _on_link_clicked(self, url: QUrl) -> None:
-        """Handle link clicks — internal anchors vs external URLs."""
+        """Handle link clicks — internal anchors, topic links, external URLs.
+
+        Three kinds of link can appear in a help page:
+
+          1. ``#macros``       — an anchor inside the *current* page. Just scroll.
+          2. ``amtor``         — an internal *topic* link (e.g. ``[AMTOR](amtor)``).
+                                 No URL scheme, and the target is a key in
+                                 HELP_TOPICS → load that help page (switch topic).
+          3. ``http://…``      — an external URL → hand to the system browser.
+
+        Lernmodus: QTextBrowser hands us a QUrl. A relative Markdown link like
+        ``[AMTOR](amtor)`` has *no* scheme (``url.scheme() == ""``) and its path
+        is ``"amtor"``; an external link carries ``http``/``https``. We therefore
+        branch on the scheme/anchor first and only treat schemeless links as
+        topic keys — that is what makes the help pages cross-link to each other.
+        """
         url_str = url.toString()
         if url_str.startswith('#'):
-            # Internal anchor
+            # 1. Internal anchor within the current page
             self._browser.scrollToAnchor(url_str[1:])
-        elif url_str.startswith('http'):
-            # External link — open in system browser
+            return
+        if url_str.startswith('http'):
+            # 3. External link — open in system browser
             QDesktopServices.openUrl(url)
-        else:
-            logger.debug("Unhandled link: %s", url_str)
+            return
+        # 2. Internal topic link (e.g. [AMTOR](amtor)) → switch help page
+        key = url.path() or url_str
+        if key in HELP_TOPICS:
+            self._load_topic(key)
+            return
+        logger.debug("Unhandled link: %s", url_str)
 
 
 # ---------------------------------------------------------------------------
 # Convenience function
 # ---------------------------------------------------------------------------
 
-def show_help(topic: str = "baudot", anchor: str = "",
+def show_help(topic: str = "index", anchor: str = "",
               parent=None) -> None:
     """Open the help viewer for the given topic.
 
