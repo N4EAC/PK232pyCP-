@@ -626,9 +626,7 @@ class PacketBaseScreen(QWidget):
         macro_row.addWidget(self.btn_clear_rx)
 
         self.btn_edit_macros = _no_focus_btn("Edit Macros", BTN_W + 20)
-        self.btn_edit_macros.setStyleSheet(
-            "QPushButton { border: 1px solid #666; border-radius: 4px; padding: 4px; }"
-        )
+        # No stylesheet → palette-driven, readable in every theme.
         self.btn_edit_macros.clicked.connect(self._on_edit_macros)
         macro_row.addWidget(self.btn_edit_macros)
         root.addLayout(macro_row)
