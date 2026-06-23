@@ -389,6 +389,8 @@ class FaxScreen(QWidget):
     └────────────────────────────────────────────────────────┘
     """
 
+    HELP_TOPIC = "fax"   # F1 / ? button → help_fax.md
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
