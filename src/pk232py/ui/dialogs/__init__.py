@@ -2,7 +2,6 @@
 # Copyright (C) 2026  OE3GAS  —  GPL v2
 """pk232py.ui.dialogs — Configuration dialogs."""
 
-from .tnc_config     import TNCConfigDialog
 from .params_hf      import HFPacketParamsDialog
 from .params_misc    import MiscParamsDialog
 from .params_pactor  import PACTORParamsDialog
@@ -10,8 +9,12 @@ from .params_amtor   import AMTORParamsDialog
 from .params_baudot  import BaudotParamsDialog
 from .params_maildrop import MailDropParamsDialog
 
+# NB: the active TNC-config dialog is `TncConfigDialog` in
+# `pk232py/ui/tnc_config_dialog.py` (used by MainWindow). The old
+# `dialogs/tnc_config.py::TNCConfigDialog` was a duplicate, never instantiated,
+# and was removed 2026-06-23 — do not re-add it here.
+
 __all__ = [
-    "TNCConfigDialog",
     "HFPacketParamsDialog",
     "MiscParamsDialog",
     "PACTORParamsDialog",

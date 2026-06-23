@@ -105,7 +105,6 @@ check_file "$SRC/ui/__init__.py"     100
 check_file "$SRC/ui/main_window.py"  1000
 check_file "$SRC/ui/tnc_config_dialog.py" 500
 check_file "$SRC/ui/dialogs/__init__.py"   10
-check_file "$SRC/ui/dialogs/tnc_config.py" 500
 
 # ── Infrastructure ───────────────────────────────────────────────────
 hdr "log/"
