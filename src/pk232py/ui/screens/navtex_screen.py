@@ -95,6 +95,8 @@ class NavtexScreen(QWidget):
              NAVTEX ist reiner Empfangsmodus ohne Sendefunktion.
     """
 
+    HELP_TOPIC = "navtex"   # F1 / ? button → help_navtex.md
+
     def __init__(self, parent=None):
         super().__init__(parent)
 
