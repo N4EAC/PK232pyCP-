@@ -43,7 +43,7 @@ from PyQt6.QtGui import QFont
 
 from .opmode_rtty_base import (
     MacroStore, MacroEditDialog,
-    make_toggle_button, add_hline, apply_macro_tooltips,
+    make_toggle_button, make_help_button, add_hline, apply_macro_tooltips,
     apply_app_style, style_rx_widget, style_tx_widget,
     BTN_W, SPACING, MACRO_COUNT,
     STYLE_PROM_INACTIVE, STYLE_SEND_ON, STYLE_SEND_BLINK, STYLE_RECEIVE_ON,
@@ -204,6 +204,7 @@ class PactorScreen(QWidget):
         self.lbl_utc.setAlignment(Qt.AlignmentFlag.AlignRight)
         self._update_utc()
         title_row.addWidget(self.lbl_utc)
+        title_row.addWidget(make_help_button("pactor"))
         root.addLayout(title_row)
 
         add_hline(root)
