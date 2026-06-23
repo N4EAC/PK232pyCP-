@@ -29,6 +29,7 @@ class BaudotScreen(RttyBaseScreen):
     """
 
     MODE_TITLE = "Baudot"
+    HELP_TOPIC = "baudot"
 
     def _build_mode_buttons(self, layout: QHBoxLayout) -> None:
         """Baudot-spezifische Buttons in Reihe 2."""
