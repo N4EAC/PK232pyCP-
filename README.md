@@ -98,6 +98,25 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on how to contribute.
 
 ---
 
+## Building from source (Windows)
+
+Requirements: Python 3.x (CPython official, not Microsoft Store),
+Git, PowerShell 5+.
+
+```powershell
+git clone https://github.com/oe3gas/PK232py
+cd PK232py
+python -m venv .venv
+.venv\Scripts\pip install -e ".[dev]"
+.venv\Scripts\pip install nuitka
+.\build_windows.ps1
+```
+
+Output: `dist\pk232py.exe` — single executable, no installation needed.
+First run extracts to %TEMP% (~60–80 MB), subsequent runs use cached files.
+
+---
+
 ## Project Structure
 
 ```
