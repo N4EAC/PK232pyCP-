@@ -71,8 +71,24 @@ HELP_TOPICS: dict[str, tuple[str, str]] = {
     "rbaud":     ("help_baudot.md", "rbaud--transmission-speed"),
 }
 
-# Location of help files — relative to this module's directory
-_HELP_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "help")
+# Location of help files.
+#
+# Two layouts to support:
+#   * Normal interpreter — this module is src/pk232py/ui/screens/help_viewer.py,
+#     so the help dir is two levels up at src/pk232py/help.
+#   * Nuitka --onefile — at runtime the package is unpacked to a temporary
+#     directory; __file__ is NOT a reliable anchor there. Nuitka injects the
+#     built-in __compiled__ object whose .containing_dir is the extraction root,
+#     and build_windows.ps1 places the help files at <root>/pk232py/help
+#     (via --include-data-dir=src/pk232py/help=pk232py/help).
+try:
+    _HELP_DIR = os.path.join(
+        __compiled__.containing_dir, "pk232py", "help"   # type: ignore[name-defined]  # noqa: F821
+    )
+except NameError:
+    _HELP_DIR = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "..", "help"
+    )
 
 
 def _find_help_file(filename: str) -> str | None:
