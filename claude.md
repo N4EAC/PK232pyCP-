@@ -98,9 +98,15 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
   2026-06-22 (Help-System-Sprint; see Backlog.md Completed-Block).
 - ~~APRS auf HF-Packet-Screen~~ ✅ DONE 2026-06-22 (`APRS_CAPABLE = True` in
   `HFPacketScreen` — eine Zeile, Decode-Logik bereits mode-agnostisch).
-- Offen (Help-System Folge): `help_amtor.md` Gegenlesen (CC-Neufassung vs.
-  freigegebene Chat-Version); eigene `help_shortcuts.md` / `help_controls.md`
-  statt Anchors in `help_baudot.md` (v0.2).
+- ~~Help-System Bugfixes (toter `controls`-Anker, fehlende Tooltips,
+  Status-Bar-Tooltips, Dead-Code `TNCConfigDialog`)~~ ✅ DONE 2026-06-23
+  (Help-Bugfix-Sprint; see Backlog.md Completed-Block).
+- 🧹 Cleanup (nicht Beta-kritisch, jederzeit): `main_window.py:4170–4191`
+  §10-Append-Artefakt entfernen (No-op-String — siehe Gotcha).
+- Offen (Help-System Folge, v0.2): `help_amtor.md` Gegenlesen (CC-Neufassung
+  vs. freigegebene Chat-Version); eigene `help_shortcuts.md` / `help_macros.md`
+  statt Anchors in `help_baudot.md` (`controls` ist bereits ausgelagert);
+  Help-Buttons in Dialogen, Kontext-F1, First-Run-Dialog, Verbose-Terminal-Help.
 - Packet hardware re-tests (need a real AX.25 second station): T35/T37
   Connect/Disconnect, T38/T39 mutual exclusion (+interactive mock GUI re-click),
   T41/T42 MHEARD (+live-GUI Refresh click). All software/mock-verified.
@@ -590,6 +596,31 @@ Grows over time.
   use `git add claude.md`.
 - **Project docs are not in `pk232py_sources.txt`** — upload them to the Claude
   project knowledge separately. See §1.
+
+### Dead Code / Cleanup
+
+- **`main_window.py` §10 append artefact (2026-06-23).** Lines **4170–4191**
+  hold an appended, mangled fragment of `tnc_config_dialog.py` (the `# === … ===`
+  separator + copyright + module docstring, with mojibake `â€”`/`â€¦`). It is a
+  bare module-level string expression — a **no-op**, NOT a duplicate `class`
+  definition, so it shadows nothing and causes no defect. This is the §10
+  PowerShell-copy corruption signature (here at line 4170, not the historical
+  ~1503). Remove lines 4170–4191 in one commit when convenient; verify the file
+  still ends cleanly at the real `_restore_window_geometry()` body.
+- **Only ONE TNC-config dialog is live: `ui/tnc_config_dialog.py::TncConfigDialog`**
+  (imported by `MainWindow`). The duplicate `ui/dialogs/tnc_config.py::`
+  `TNCConfigDialog` was dead (only re-exported, never instantiated) and was
+  **deleted 2026-06-23** — do not re-add it. Note the casing: `TncConfigDialog`
+  (live) vs `TNCConfigDialog` (deleted).
+
+### Help content
+
+- **`help_controls.md` documents ONLY `[^D]` and `[^T:n]`.** Those are the only
+  TX control markers `TxInputWidget` actually supports (Ctrl-D EOT, Ctrl-T timed
+  — `opmode_rtty_base.py:389–447`). **WRU (Ctrl-E) and AAB (Ctrl-B) are NOT
+  typeable TX control characters** — they exist only as TNC parameters
+  (auto-answerback) set via `params_baudot` / `params_amtor`. Do not list them
+  as control characters in the help.
 
 ---
 
