@@ -280,6 +280,12 @@ class MainWindow(QMainWindow):
         # The active theme shows a check mark; clicking one applies it live and
         # persists it. See _on_theme_selected() / _sync_theme_checks().
         from pk232py.ui.themes import THEMES, THEME_ORDER
+        # Non-clickable header above the theme list.
+        theme_header = QAction("— Select Theme —", self)
+        theme_header.setEnabled(False)
+        appear_menu.addAction(theme_header)
+        appear_menu.addSeparator()
+
         self._theme_group = QActionGroup(self)
         # ExclusiveOptional: exactly one preset checked, OR none (when the user
         # has a "custom" appearance that matches no preset).
@@ -3694,6 +3700,12 @@ class MainWindow(QMainWindow):
         a = self._app_config.appearance
         self._apply_palette()   # global QPalette + style (menus, dialogs, buttons)
         font = QFont(a.font_family, a.font_size)
+        # TX text colour: a distinct gold accent ONLY on the Dark theme (where
+        # it reads well and separates TX from RX). On every other theme — Mono
+        # (grey, no colour), Retro (amber), Air (dark on light), or a custom
+        # scheme — use the theme foreground so the TX text never ends up an
+        # unreadable gold-on-light (the Air bug).
+        tx_fg = "#ffee88" if a.theme == "dark" else a.fg_color
         style_rx = (
             f"background-color:{a.bg_color}; "
             f"color:{a.fg_color}; border:none;"
@@ -3718,7 +3730,7 @@ class MainWindow(QMainWindow):
                 # from RX text (blue) even before SEND is pressed.
                 from PyQt6.QtGui import QTextCharFormat, QColor
                 _tx_fmt = QTextCharFormat()
-                _tx_fmt.setForeground(QColor('#ffee88'))  # TX yellow
+                _tx_fmt.setForeground(QColor(tx_fg))  # theme-aware TX colour
                 screen.tx_input.setCurrentCharFormat(_tx_fmt)
                 # Block cursor: width = one average character
                 char_w = screen.tx_input.fontMetrics().averageCharWidth()
