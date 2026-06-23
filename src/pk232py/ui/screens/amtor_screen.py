@@ -433,9 +433,8 @@ class AmtorScreen(QWidget):
 
         self.btn_edit_macros = QPushButton("Edit Macros")
         self.btn_edit_macros.setFixedWidth(BTN_W + 20)
-        self.btn_edit_macros.setStyleSheet(
-            "QPushButton { border: 1px solid #666; border-radius: 4px; padding: 4px; }"
-        )
+        self.btn_edit_macros.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # No stylesheet → palette-driven, readable in every theme.
         self.btn_edit_macros.clicked.connect(self._on_edit_macros)
         macro_row.addWidget(self.btn_edit_macros)
         root.addLayout(macro_row)
