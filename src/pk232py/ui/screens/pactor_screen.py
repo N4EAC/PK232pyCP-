@@ -127,6 +127,8 @@ class PactorScreen(QWidget):
     └──────────────────────────────────────────────────────────┘
     """
 
+    HELP_TOPIC = "pactor"   # F1 / ? button → help_pactor.md
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._macro_store = MacroStore()
