@@ -715,18 +715,27 @@ class MainWindow(QMainWindow):
         # Row 1 (Qt status bar): Port | Baud | Mode | UTC
         self._sb_port = QLabel("Port: ---")
         self._sb_port.setMinimumWidth(120)
+        self._sb_port.setToolTip("Serial port connected to the TNC")
         sb.addPermanentWidget(self._sb_port)
 
         self._sb_baud = QLabel("Baud: ---")
         self._sb_baud.setMinimumWidth(90)
+        self._sb_baud.setToolTip("Serial port baud rate")
         sb.addPermanentWidget(self._sb_baud)
 
         self._sb_mode = QLabel("Mode: OFFLINE")
         self._sb_mode.setMinimumWidth(150)
+        self._sb_mode.setToolTip(
+            "Current TNC connection mode:\n"
+            "OFFLINE — not connected\n"
+            "VERBOSE — connected, command terminal mode\n"
+            "HOST MODE — connected, full program control"
+        )
         sb.addPermanentWidget(self._sb_mode)
 
         self._sb_time = QLabel("UTC: --:--:--")
         self._sb_time.setMinimumWidth(110)
+        self._sb_time.setToolTip("Current UTC time")
         sb.addPermanentWidget(self._sb_time)
 
         self._utc_timer = QTimer(self)
