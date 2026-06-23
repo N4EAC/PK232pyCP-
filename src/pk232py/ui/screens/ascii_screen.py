@@ -36,6 +36,7 @@ class AsciiScreen(RttyBaseScreen):
     """
 
     MODE_TITLE  = "ASCII RTTY"
+    HELP_TOPIC  = "ascii"
     BAUD_LABEL  = "ABAUD (Speed):"
     BAUD_VALUES = [
         "45", "50", "57", "75", "100", "110", "150", "200", "300",
