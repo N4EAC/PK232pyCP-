@@ -71,24 +71,31 @@ HELP_TOPICS: dict[str, tuple[str, str]] = {
     "rbaud":     ("help_baudot.md", "rbaud--transmission-speed"),
 }
 
-# Location of help files.
+# Location of help files — anchored on this module's own __file__.
 #
-# Two layouts to support:
-#   * Normal interpreter — this module is src/pk232py/ui/screens/help_viewer.py,
-#     so the help dir is two levels up at src/pk232py/help.
-#   * Nuitka --onefile — at runtime the package is unpacked to a temporary
-#     directory; __file__ is NOT a reliable anchor there. Nuitka injects the
-#     built-in __compiled__ object whose .containing_dir is the extraction root,
-#     and build_windows.ps1 places the help files at <root>/pk232py/help
-#     (via --include-data-dir=src/pk232py/help=pk232py/help).
+# This resolves correctly in BOTH a normal interpreter AND a Nuitka --onefile
+# build:
+#   * Normal interpreter: this module is src/pk232py/ui/screens/help_viewer.py,
+#     so ../../help → src/pk232py/help.
+#   * Nuitka --onefile: at startup Nuitka unpacks the payload to a TEMP dir and
+#     sets __file__ to <temp>/pk232py/ui/screens/help_viewer.(py|pyc). The help
+#     files, bundled via --include-data-dir=src/pk232py/help=pk232py/help, land
+#     at <temp>/pk232py/help — the SAME ../../help relative to this module.
+#
+# Do NOT use __compiled__.containing_dir for bundled data: it points at the EXE
+# directory (dist/), NOT the temp extraction dir where the data actually lives.
+_HELP_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "help")
+)
+
+# In a compiled build, log the resolved help dir once so a future path problem
+# is diagnosable from a --log-level DEBUG run on real hardware.
 try:
-    _HELP_DIR = os.path.join(
-        __compiled__.containing_dir, "pk232py", "help"   # type: ignore[name-defined]  # noqa: F821
-    )
+    __compiled__          # noqa: F821  (Nuitka built-in, present only when compiled)
+    logger.debug("onefile _HELP_DIR: %s (exists: %s)",
+                 _HELP_DIR, os.path.isdir(_HELP_DIR))
 except NameError:
-    _HELP_DIR = os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "..", "help"
-    )
+    pass
 
 
 def _find_help_file(filename: str) -> str | None:
