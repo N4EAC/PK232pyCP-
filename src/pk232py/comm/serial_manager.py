@@ -595,11 +595,22 @@ class SerialManager(QObject):
             port_name = self._serial.port
             baudrate  = self._serial.baudrate
 
+            # Nuitka --onefile has no python.exe to spawn pk232_hostmode_sub.py
+            # as a script, and sys.executable is the app EXE itself — so spawning
+            # would re-launch the GUI. Detect the compiled build and run the
+            # SAME handshake in-process instead. A normal interpreter keeps the
+            # proven subprocess path unchanged.
+            try:
+                __compiled__          # noqa: F821  (Nuitka injects this when compiled)
+                _is_compiled = True
+            except NameError:
+                _is_compiled = False
+
             sub_script = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)),
                 "pk232_hostmode_sub.py"
             )
-            if not os.path.exists(sub_script):
+            if not _is_compiled and not os.path.exists(sub_script):
                 raise FileNotFoundError(f"Not found: {sub_script}")
 
             # Stop ReaderThread and close port
@@ -608,17 +619,25 @@ class SerialManager(QObject):
                 self._reader.join(timeout=2.0)
                 self._reader = None
             self._serial.close()
-            logger.debug("Port closed for subprocess")
+            logger.debug("Port closed for Host Mode entry")
             time.sleep(0.3)
 
-            # Run subprocess — proven Host Mode entry sequence
-            result = subprocess.run(
-                [sys.executable, sub_script, port_name, str(baudrate)],
-                capture_output=True, text=True, timeout=15
-            )
-            output = result.stdout.strip()
-            stderr = result.stderr.strip()
-            logger.info("Subprocess stdout: %r", output)
+            # Run the proven Host Mode entry sequence.
+            if _is_compiled:
+                # In-process: same byte sequence, fresh Serial object (CLAUDE.md §3).
+                from .pk232_hostmode_sub import enter_host_mode
+                logger.info("Host Mode entry in-process (compiled build)")
+                ok, raw = enter_host_mode(port_name, baudrate)
+                output = "OK" if ok else "FAIL:" + raw.hex()
+                stderr = ""
+            else:
+                result = subprocess.run(
+                    [sys.executable, sub_script, port_name, str(baudrate)],
+                    capture_output=True, text=True, timeout=15
+                )
+                output = result.stdout.strip()
+                stderr = result.stderr.strip()
+            logger.info("Host Mode entry result: %r", output)
             if stderr:
                 logger.error("Subprocess stderr: %s", stderr)
 
