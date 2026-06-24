@@ -188,33 +188,49 @@ class HostModeWorker(threading.Thread):
 # Subprocess entry point
 # ---------------------------------------------------------------------------
 
-if __name__ == "__main__":
+def enter_host_mode(port_name: str, baud: int) -> tuple[bool, bytes]:
+    """Run the proven Host Mode entry handshake on a freshly opened port.
+
+    Opens its OWN ``serial.Serial`` object, runs the exact byte sequence
+    (``HOST 3`` + ``HPOLL Y``), closes it again, and returns
+    ``(success, raw_response)``.
+
+    This is the SAME sequence the ``__main__`` subprocess runs, factored out so
+    that ``serial_manager`` can call it **in-process** when the app is a Nuitka
+    ``--onefile`` build: a onefile binary contains no ``python.exe`` to spawn
+    this file as a script, and ``sys.executable`` points at the app EXE. In a
+    normal interpreter, ``serial_manager`` still spawns ``__main__`` as a
+    subprocess (unchanged, proven). The handshake uses direct ``port.read()``
+    so the Prolific ACK path is unaffected (CLAUDE.md §3).
+    """
     import serial
+
+    port = serial.Serial(port_name, baud, bytesize=8, parity='N', stopbits=1,
+                         timeout=0.1, xonxoff=False, rtscts=False)
+    try:
+        time.sleep(0.3)
+        port.reset_input_buffer()
+
+        port.write(b"\rXFLOW OFF\r\rHOST 3")
+        port.flush()
+        read_until(port, b"cmd:cmd:", timeout=2.0)
+
+        port.write(b"\r")
+        port.flush()
+        read_until(port, b"\r\n", timeout=1.0)
+
+        port.write(HPOLL_Y)
+        port.flush()
+        r = read_until(port, [HPOLL_ACK, HPOLL_Y], timeout=2.0)
+
+        # Accept both HP $00 (ACK) and HP Y (already in HPOLL ON) as success.
+        return (HPOLL_ACK in r or HPOLL_Y in r), r
+    finally:
+        port.close()
+
+
+if __name__ == "__main__":
     import sys
 
-    PORT = sys.argv[1]
-    BAUD = int(sys.argv[2])
-
-    port = serial.Serial(PORT, BAUD, bytesize=8, parity='N', stopbits=1,
-                         timeout=0.1, xonxoff=False, rtscts=False)
-    time.sleep(0.3)
-    port.reset_input_buffer()
-
-    port.write(b"\rXFLOW OFF\r\rHOST 3")
-    port.flush()
-    read_until(port, b"cmd:cmd:", timeout=2.0)
-
-    port.write(b"\r")
-    port.flush()
-    read_until(port, b"\r\n", timeout=1.0)
-
-    port.write(HPOLL_Y)
-    port.flush()
-    r = read_until(port, [HPOLL_ACK, HPOLL_Y], timeout=2.0)
-
-    # Accept both HP /bin/sh0 (ACK) and HP Y (already in HPOLL ON) as success
-    if HPOLL_ACK in r or HPOLL_Y in r:
-        print("OK")
-    else:
-        print("FAIL:" + r.hex())
-    port.close()
+    ok, resp = enter_host_mode(sys.argv[1], int(sys.argv[2]))
+    print("OK" if ok else "FAIL:" + resp.hex())
