@@ -38,32 +38,10 @@ jobs:
       - name: Install package (editable)
         run: pip install -e .
 
-      - name: Syntax check — all .py files
+      - name: Syntax check - all .py files
         run: |
-          python -m py_compile src/pk232py/comm/constants.py
-          python -m py_compile src/pk232py/comm/frame.py
-          python -m py_compile src/pk232py/comm/hostmode.py
-          python -m py_compile src/pk232py/comm/autobaud.py
-          python -m py_compile src/pk232py/comm/kiss.py
-          python -m py_compile src/pk232py/comm/serial_manager.py
-          python -m py_compile src/pk232py/modes/base_mode.py
-          python -m py_compile src/pk232py/modes/packet_hf.py
-          python -m py_compile src/pk232py/modes/packet_vhf.py
-          python -m py_compile src/pk232py/modes/pactor.py
-          python -m py_compile src/pk232py/modes/amtor.py
-          python -m py_compile src/pk232py/modes/rtty_baudot.py
-          python -m py_compile src/pk232py/modes/rtty_ascii.py
-          python -m py_compile src/pk232py/modes/morse.py
-          python -m py_compile src/pk232py/modes/navtex.py
-          python -m py_compile src/pk232py/modes/tdm.py
-          python -m py_compile src/pk232py/modes/fax.py
-          python -m py_compile src/pk232py/modes/signal_analysis.py
-          python -m py_compile src/pk232py/config.py
-          python -m py_compile src/pk232py/mode_manager.py
-          python -m py_compile src/pk232py/log/qso_log.py
-          python -m py_compile src/pk232py/macros/macro_manager.py
-          python -m py_compile src/pk232py/maildrop/maildrop.py
-          python -m py_compile src/pk232py/maildrop/message_store.py
+          python -m compileall -q src/pk232py
+          python -m compileall -q tools
 
       - name: Run unit tests
         run: pytest src/pk232py/tests/ -v --tb=short
