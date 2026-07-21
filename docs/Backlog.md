@@ -1,6 +1,6 @@
 # PK232PY — Development Backlog
 
-**Last updated:** 2026-06-22 (v16)
+**Last updated:** 2026-07-21 (v16)
 **Current version:** v0.1 (development)
 
 ---
@@ -27,6 +27,16 @@
 
 *Note: monitoring on 144.800 MHz has replaced most RX-only tests.
 The T35/T37 + T38/T39 + T41/T42 hardware re-tests still need a real station.*
+
+### Beta Release (v0.1-beta) — GitHub distribution
+- [ ] Windows build reproducible (decide: Nuitka onefile vs PyInstaller --onedir)
+- [ ] GitHub Actions build workflow, triggered on release tags (v*)
+- [ ] GitHub Release with attached Windows binary
+- [ ] SHA-256 checksum published alongside the binary
+- [ ] Unsigned-EXE tester note (SmartScreen/Defender workaround in README)
+- [ ] Issue template for testers (firmware, COM/adapter, log excerpt)
+- [ ] LICENSE / CONTRIBUTING.md / CHANGELOG.md present and referenced by README
+- [ ] README "Download & Run the Beta" section for non-developers
 
 ---
 
