@@ -3,8 +3,10 @@
 """FAX receive mode (HF weather-chart facsimile).
 
 The PK-232MBX can receive HF weather-chart facsimile (WEFAX) broadcasts.
-FAX is receive-only in practice; the TNC outputs received pixel data
-which must be rendered by the host application.
+FAX is receive-only in practice. The TNC outputs the image over $3F as an
+Epson 9-pin printer-graphics stream (ESC L double-density bit image +
+ESC A band separators), which EpsonFaxParser decodes into grayscale image
+rows for the host to render (live decode implemented; Testplan T82).
 
 Key characteristics
 -------------------
@@ -202,16 +204,20 @@ class EpsonFaxParser:
 class FAXMode(BaseMode):
     """HF Weather-chart FAX receive mode.
 
-    Receive-only mode for HF facsimile broadcasts (WEFAX).
-    Pixel data is delivered as RX_MONITOR ($3F) frames.
-
-    Note: Rendering of pixel data into an image is the responsibility
-    of the host application (not implemented in v1.2).
+    Receive-only mode for HF facsimile broadcasts (WEFAX). The TNC delivers
+    the image over RX_MONITOR ($3F) frames as an **Epson 9-pin printer-graphics
+    stream** (ESC L bit image + ESC A band separators), NOT as grayscale scan
+    lines. FAXMode holds an EpsonFaxParser, feeds every $3F payload to it in
+    handle_frame(), and resets it in get_activate_frames(); the parser turns the
+    stream into finished grayscale image rows and hands each one to
+    on_data_received. (Live image decode is fully implemented and
+    hardware-verified — Testplan T82.)
 
     Callbacks
     ---------
     ``on_data_received``  : ``Callable[[bytes], None]``
-        Called with raw FAX pixel/line data ($3F frames).
+        Called once per decoded grayscale image row (0=black, 255=white),
+        produced by EpsonFaxParser from the $3F Epson-graphics stream.
     """
 
     name         = "FAX"

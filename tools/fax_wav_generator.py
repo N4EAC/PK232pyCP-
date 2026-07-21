@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-fax_wav_generator.py — WEFAX test-WAV generator for PK232PY.
+fax_wav_generator.py - WEFAX test-WAV generator for PK232PY.
 
 Generates three self-contained WEFAX (HF weather-fax) WAV files that can be
 fed into the PK232PY FAX decoder or the standalone WEFAX audio-decoder tool
@@ -15,22 +15,36 @@ Each file is a complete WEFAX transmission:
 
     [ APT start tone ] [ phasing lines ] [ image lines ] [ stop tone ] [ black ]
 
-Dependencies: numpy + Pillow + the stdlib ``wave`` module. (No scipy, no Qt —
+Dependencies: numpy + Pillow + the stdlib ``wave`` module. (No scipy, no Qt -
 deliberately kept dependency-light so the tool runs in a bare venv.)
 
 Usage:
     cd E:\\PK232\\pk232py_repo
-    python tools/fax_wav_generator.py
+    python tools/fax_wav_generator.py                 # sw profile (default)
+    python tools/fax_wav_generator.py --target tnc    # PK-232 HW profile
+
+Tone profiles (--target):
+    sw  (default) black 1500 Hz / white 2300 Hz, centre 1900, shift 800.
+                  The on-air WEFAX convention the SOFTWARE decoder
+                  (fax_decoder_test.py) expects - used for the closed-loop test.
+    tnc           black 1200 Hz / white 2200 Hz, centre 1700, shift 1000.
+                  Matches the AEA PK-232MBX's 1000 Hz wide-shift FAX demod
+                  (centre 1.7 kHz). When you feed a WAV straight into the TNC
+                  (audio loopback, no radio) the tones in the FILE must already
+                  sit on the TNC's demod centre - the offset cannot be tuned
+                  out, so a 1500/2300 file barely swings the discriminator and
+                  the TNC never locks. tnc files get a "_tnc" filename suffix so
+                  the existing sw WAVs are never overwritten.
 
 ------------------------------------------------------------------------------
-LERNMODUS — the two non-obvious ideas in this file
+LERNMODUS - the two non-obvious ideas in this file
 ------------------------------------------------------------------------------
 
 1. PHASE ACCUMULATOR (continuous-phase FM / DDS)
    We do NOT build the signal by concatenating little sine snippets, one per
    pixel:  sin(2*pi*f1*t) ++ sin(2*pi*f2*t) ++ ...
    Each snippet starts its sine at phase 0, so at every pixel boundary the
-   waveform jumps. Those discontinuities are audible clicks and — far worse —
+   waveform jumps. Those discontinuities are audible clicks and - far worse -
    they put broadband energy into the spectrum that confuses an FM
    demodulator (it sees a phantom frequency spike at every join).
 
@@ -41,7 +55,7 @@ LERNMODUS — the two non-obvious ideas in this file
        signal[n] = sin(phase[n])
 
    Because phase is the running integral of frequency, it is continuous by
-   construction even though f[n] is a staircase — no clicks anywhere, not even
+   construction even though f[n] is a staircase - no clicks anywhere, not even
    between the framing tones and the image. This is exactly how a real
    FSK/FM modulator (a DDS chip) works.
 
@@ -50,6 +64,10 @@ LERNMODUS — the two non-obvious ideas in this file
        black pixel (0)   -> 1500 Hz   (low tone)
        white pixel (255) -> 2300 Hz   (high tone)
    so:   f = F_BLACK + (pixel/255) * (F_WHITE - F_BLACK)
+
+   The black/white tone pair is selectable via --target (see TONE_PROFILES):
+   the "tnc" profile shifts it to 1200/2200 Hz for the PK-232 hardware demod.
+   Only the two endpoint frequencies change - this linear mapping is unchanged.
 
    GOTCHA: the original task text wrote this as
        f = white + (pixel/255)*(black - white)
@@ -62,6 +80,7 @@ LERNMODUS — the two non-obvious ideas in this file
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import wave
@@ -76,12 +95,12 @@ except ImportError:  # pragma: no cover - clear guidance instead of a traceback
 
 
 # ===========================================================================
-# PATH ANCHORS  — resolve data files relative to THIS SCRIPT, not the CWD
+# PATH ANCHORS  - resolve data files relative to THIS SCRIPT, not the CWD
 # ===========================================================================
 # LERNMODUS: a plain "Wetterkarte.jpg" candidate is interpreted relative to the
 # current working directory. That works when you launch from the repo root
 # (`python tools/fax_wav_generator.py`) but silently fails when you `cd tools`
-# first — the same relative name then points at tools/tools/... which does not
+# first - the same relative name then points at tools/tools/... which does not
 # exist, and the generator either falls back to the decoded PNG or aborts.
 # Anchoring on __file__ makes the lookup independent of where you start from:
 # the script always knows where it lives on disk, so the candidate list below
@@ -91,7 +110,7 @@ _REPO_ROOT  = _SCRIPT_DIR.parent                   # .../pk232py_repo
 
 
 # ===========================================================================
-# CONSTANTS  — every WEFAX / audio parameter lives here and is editable
+# CONSTANTS  - every WEFAX / audio parameter lives here and is editable
 # ===========================================================================
 
 # --- Audio format ----------------------------------------------------------
@@ -101,15 +120,40 @@ SAMPLE_RATE   = 11025        # Hz. Nyquist 5512 Hz >> 2300 Hz tone -> plenty of
 BITS_PER_SAMPLE = 16         # 16-bit PCM
 AMPLITUDE     = 0.8          # peak fraction of full scale (headroom vs clipping)
 
-# --- WEFAX tone frequencies -------------------------------------------------
-F_BLACK       = 1500.0       # Hz — black pixel  (low tone)
-F_WHITE       = 2300.0       # Hz — white pixel  (high tone)
-# Centre 1900 Hz, shift +/-400 Hz. (The PK-232 internally uses a 1.7 kHz /
-# 1000 Hz wide-shift filter, but 1500/2300 Hz is the on-air WEFAX convention
-# that file decoders expect — see module docstring.)
+# --- WEFAX tone profiles ----------------------------------------------------
+# Two black/white tone pairs, selected by main() from the --target argument.
+# Only the black & white endpoints differ; everything else (300 Hz APT keying
+# rate, 450 Hz stop tone, timing, geometry) is profile-independent.
+#   sw  : on-air WEFAX convention - matches the SOFTWARE decoder
+#         (fax_decoder_test.py) for the closed-loop test. (Centre 1900, shift 800.)
+#   tnc : AEA PK-232MBX 1000 Hz wide-shift demod, centre 1.7 kHz - the tones a
+#         WAV must carry to lock the TNC over an audio loopback. (Centre 1700,
+#         shift 1000.) See module docstring for why the offset can't be tuned out.
+TONE_PROFILES = {
+    "sw":  {"f_black": 1500.0, "f_white": 2300.0,
+            "desc": "on-air WEFAX (software decoder fax_decoder_test.py)"},
+    "tnc": {"f_black": 1200.0, "f_white": 2200.0,
+            "desc": "AEA PK-232MBX 1000 Hz wide-shift HW demod (centre 1.7 kHz)"},
+}
 
-F_APT_START   = 300.0        # Hz — APT start keying rate for IOC 576
-F_STOP        = 450.0        # Hz — WEFAX stop tone
+# Module-level DEFAULTS = the "sw" profile. pixel_to_freq / phasing_freq /
+# apt_start_freq / stop_freq / sanity_check all read these two names as module
+# globals at CALL time; main() reassigns them once from the chosen profile
+# before any frequency array is built (see main() for why that is safe here).
+F_BLACK       = TONE_PROFILES["sw"]["f_black"]   # Hz - black pixel (low tone)
+F_WHITE       = TONE_PROFILES["sw"]["f_white"]   # Hz - white pixel (high tone)
+
+F_APT_START   = 300.0        # Hz - APT start keying rate for IOC 576 (unchanged)
+F_STOP        = 450.0        # Hz - WEFAX stop tone (unchanged)
+
+
+def _profile_centre_shift() -> tuple[float, float]:
+    """(centre, black<->white shift) of the active tone pair, in Hz.
+
+    centre = midpoint of the two tones; shift = full black-to-white span
+    (sw -> 1900/800, tnc -> 1700/1000). Reads the live F_BLACK/F_WHITE globals.
+    """
+    return (F_BLACK + F_WHITE) / 2.0, F_WHITE - F_BLACK
 
 # --- Timing -----------------------------------------------------------------
 LPM           = 120          # lines per minute (FSPEED 2 = 2 lines/s)
@@ -155,8 +199,8 @@ _PREFERRED_FONTS = {"arial.ttf"}   # lower-cased basenames we treat as "Arial"
 # everyone: tools/synthetic_weatherchart.png is generated deterministically by
 # make_synthetic_weatherchart.py (regenerate with `python
 # tools/make_synthetic_weatherchart.py`). The real DWD chart
-# (tools/Wetterkarte.jpg, © Deutscher Wetterdienst) is NOT in the repo for
-# copyright reasons — it stays as a lower-priority local fallback, as does the
+# (tools/Wetterkarte.jpg, (C) Deutscher Wetterdienst) is NOT in the repo for
+# copyright reasons - it stays as a lower-priority local fallback, as does the
 # decoded reference PNG and the Claude project-knowledge path.
 # All in-repo candidates are anchored on _SCRIPT_DIR / _REPO_ROOT (absolute),
 # so the lookup works whether you start from the repo root or from tools/.
@@ -183,7 +227,7 @@ LOREM = (
 
 
 # ===========================================================================
-# FM ENCODER  — instantaneous-frequency arrays + one phase accumulator
+# FM ENCODER  - instantaneous-frequency arrays + one phase accumulator
 # ===========================================================================
 
 def pixel_to_freq(pixel: np.ndarray | int) -> np.ndarray | float:
@@ -255,7 +299,7 @@ def image_freq(img: np.ndarray) -> np.ndarray:
 
     Each line lasts T_LINE seconds; the W pixels of the line are spread evenly
     across that time. We compute the source (line, column) for *every* output
-    sample by vectorised arithmetic — no Python loop over pixels.
+    sample by vectorised arithmetic - no Python loop over pixels.
 
     GOTCHA: T_LINE * fs = 5512.5 samples is non-integer at 120 LPM / 11025 Hz.
     Building from a fixed integer samples-per-line would drift by half a sample
@@ -282,12 +326,12 @@ def image_to_fax_signal(img: np.ndarray) -> np.ndarray:
     float32 audio with the phase accumulator. Phase-continuous across all
     pixels and lines. (main() assembles the full transmission from the
     *frequency* builders above and integrates ONCE, so even the framing/image
-    boundaries are click-free — see main().)"""
+    boundaries are click-free - see main().)"""
     return _integrate(image_freq(img))
 
 
 # ===========================================================================
-# TEST-IMAGE GENERATORS  — each returns uint8 ndarray, shape (NUM_LINES, IMG_WIDTH)
+# TEST-IMAGE GENERATORS  - each returns uint8 ndarray, shape (NUM_LINES, IMG_WIDTH)
 # ===========================================================================
 
 def _fit_to_canvas(src: Image.Image) -> np.ndarray:
@@ -301,7 +345,7 @@ def _fit_to_canvas(src: Image.Image) -> np.ndarray:
     if new_h == NUM_LINES:
         return np.asarray(src, dtype=np.uint8)
     if new_h > NUM_LINES:
-        # squash to fit — keeps the whole chart visible for geometry checks
+        # squash to fit - keeps the whole chart visible for geometry checks
         src = src.resize((IMG_WIDTH, NUM_LINES), Image.LANCZOS)
         return np.asarray(src, dtype=np.uint8)
     # shorter than the canvas: pad below with white (255)
@@ -315,7 +359,7 @@ def make_weather_image() -> np.ndarray:
 
     Candidates are absolute Paths anchored on the script location, so the
     first existing one wins regardless of the current working directory. On
-    failure we list the ABSOLUTE paths we actually probed — the old message
+    failure we list the ABSOLUTE paths we actually probed - the old message
     printed CWD-relative names, which were useless for diagnosing the very
     "launched from the wrong directory" problem this resolution scheme fixes.
     """
@@ -411,7 +455,7 @@ def make_text_image() -> np.ndarray:
     """WAV 3 source: Lorem-Ipsum text page, black on white, Arial 16 pt."""
     font, name, is_fallback = _load_font()
     if is_fallback:
-        print(f"  WARNING: Arial not found — using fallback font '{name}' "
+        print(f"  WARNING: Arial not found - using fallback font '{name}' "
               f"(metrics differ slightly from Arial).")
     else:
         print(f"  text font: '{name}' @ {FONT_PT}pt ({FONT_PX}px, {TEXT_DPI} DPI)")
@@ -466,7 +510,7 @@ def build_transmission(img: np.ndarray) -> np.ndarray:
 
     We concatenate the instantaneous-FREQUENCY arrays of every section and
     integrate exactly once. That single cumsum means there is no phase jump
-    even at the start/phasing/image/stop boundaries — the whole file is
+    even at the start/phasing/image/stop boundaries - the whole file is
     click-free.
     """
     full_freq = np.concatenate([
@@ -499,21 +543,69 @@ def sanity_check(label: str, signal: np.ndarray, fs: int) -> None:
     s0 = int(img_start_s * fs)
     s1 = min(len(signal), s0 + int(0.25 * fs))
     dom = _dominant_freq(signal[s0:s1], fs) if s1 > s0 else 0.0
+    centre, shift = _profile_centre_shift()
     print(f"  [{label}] duration={dur:6.1f}s  samples={len(signal):,}  "
           f"min/max={signal.min():+.3f}/{signal.max():+.3f}  "
-          f"dom~{dom:5.0f}Hz (band {F_BLACK:.0f}-{F_WHITE:.0f}Hz)")
+          f"dom~{dom:5.0f}Hz (band {F_BLACK:.0f}-{F_WHITE:.0f}Hz, "
+          f"centre {centre:.0f}Hz, shift {shift:.0f}Hz)")
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="fax_wav_generator.py",
+        description="Generate three self-contained WEFAX test WAVs.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "tone profiles (--target):\n"
+            "  sw   black 1500 / white 2300 Hz  (centre 1900, shift 800)\n"
+            "       on-air WEFAX convention; matches the software decoder\n"
+            "       fax_decoder_test.py. Files: fax_test_*.wav\n"
+            "  tnc  black 1200 / white 2200 Hz  (centre 1700, shift 1000)\n"
+            "       AEA PK-232MBX 1000 Hz wide-shift HW demod (centre 1.7 kHz);\n"
+            "       use when feeding a WAV straight into the TNC over an audio\n"
+            "       loopback. Files: fax_test_*_tnc.wav (sw WAVs are NOT touched)."
+        ),
+    )
+    parser.add_argument(
+        "--target", choices=("sw", "tnc"), default="sw",
+        help="WEFAX tone profile / target demodulator (default: sw).",
+    )
+    args = parser.parse_args(argv)
+
+    # LERNMODUS - why a one-time global reassignment (not a profile object
+    # threaded through every function):
+    # pixel_to_freq / phasing_freq / apt_start_freq / stop_freq / sanity_check
+    # all reference F_BLACK and F_WHITE as module globals, and they read them at
+    # CALL time. Reassigning the two names ONCE here - before a single frequency
+    # array is built - switches the entire file's tone pair with no change to
+    # any function signature (no "signature avalanche" through ~8 functions).
+    # It is safe precisely because this is a one-shot, single-threaded CLI:
+    # nothing reads the tones before main() sets them, and we never switch
+    # profile mid-run. (In a long-lived/concurrent program, mutable module
+    # globals like this would be a hazard - there a profile object is better.)
+    global F_BLACK, F_WHITE
+    profile = TONE_PROFILES[args.target]
+    F_BLACK = profile["f_black"]
+    F_WHITE = profile["f_white"]
+
+    # tnc files get a "_tnc" suffix so the closed-loop sw WAVs survive (req. 3).
+    suffix = "_tnc" if args.target == "tnc" else ""
     out_dir = Path.cwd()
     jobs = [
-        ("fax_test_wetterkarte.wav", "weather", make_weather_image),
-        ("fax_test_pattern.wav",     "pattern", make_pattern_image),
-        ("fax_test_text.wav",        "text",    make_text_image),
+        (f"fax_test_wetterkarte{suffix}.wav", "weather", make_weather_image),
+        (f"fax_test_pattern{suffix}.wav",     "pattern", make_pattern_image),
+        (f"fax_test_text{suffix}.wav",        "text",    make_text_image),
     ]
 
-    print(f"WEFAX test-WAV generator — {LPM} LPM, IOC 576, {IMG_WIDTH}px/line, "
-          f"{NUM_LINES} lines, {SAMPLE_RATE} Hz\n")
+    centre, shift = _profile_centre_shift()
+    print(f"WEFAX test-WAV generator - {LPM} LPM, IOC 576, {IMG_WIDTH}px/line, "
+          f"{NUM_LINES} lines, {SAMPLE_RATE} Hz")
+    print(f"Tone profile: --target {args.target}  ({profile['desc']})")
+    print(f"  black {F_BLACK:.0f} Hz / white {F_WHITE:.0f} Hz - "
+          f"centre {centre:.0f} Hz, black<->white shift {shift:.0f} Hz, "
+          f"band {F_BLACK:.0f}-{F_WHITE:.0f} Hz")
+    print(f"  (APT keying {F_APT_START:.0f} Hz + stop tone {F_STOP:.0f} Hz "
+          f"are profile-independent)\n")
 
     for filename, label, make_image in jobs:
         print(f"* {filename}")
@@ -529,10 +621,17 @@ def main() -> int:
         sanity_check(label, signal, SAMPLE_RATE)
         print(f"  wrote {path}  ({size_mb:.2f} MB)\n")
 
-    print("Done. Feed a WAV into the decoder:")
-    print("  - GUI:  python fax_decoder_test.py  ->  'Open WAV'  -> pick the file")
-    print("  - or play it into the PK232PY FAX screen via an audio loopback "
-          "(VB-CABLE / 'Stereo Mix') routed to the TNC/soundcard input.")
+    if args.target == "tnc":
+        print("Done (tnc profile - 1200/2200 Hz). Feed into the PK-232 HW demod:")
+        print("  - play the *_tnc.wav into the TNC's FAX audio input via an "
+              "audio loopback (VB-CABLE / 'Stereo Mix').")
+        print("  - NOTE: do NOT open a _tnc WAV in fax_decoder_test.py - that "
+              "decoder expects the sw 1500/2300 Hz tones and will not lock.")
+    else:
+        print("Done (sw profile - 1500/2300 Hz). Feed a WAV into the decoder:")
+        print("  - GUI:  python fax_decoder_test.py  ->  'Open WAV'  -> pick the file")
+        print("  - or play it into the PK232PY FAX screen via an audio loopback "
+              "(VB-CABLE / 'Stereo Mix') routed to the TNC/soundcard input.")
     return 0
 
 
