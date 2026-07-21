@@ -2,7 +2,7 @@
 
 > This file is the single entry point for Claude Code to understand the
 > PK232PY project. Read it completely before touching any source file.
-> Last updated: 2026-06-22
+> Last updated: 2026-07-21
 
 ---
 
@@ -133,7 +133,7 @@ All 10 opmode screens are implemented and integrated into `MainWindow` via
 
 | Layer | Technology |
 |-------|------------|
-| Language | Python 3.14 |
+| Language | Python 3.10+ (CI: 3.10 / 3.11 / 3.12) |
 | UI framework | PyQt6 |
 | Serial communication | pyserial |
 | Config persistence | INI file via `configparser` |
@@ -163,8 +163,8 @@ src/pk232py/
     pk232_hostmode_sub.py  Subprocess for Host Mode entry
   modes/
     base_mode.py         BaseMode lifecycle contract
-    baudot.py / ascii_rtty.py / amtor.py / morse.py / pactor.py
-    navtex.py / signal_mode.py / fax.py
+    rtty_baudot.py / rtty_ascii.py / amtor.py / morse.py / pactor.py
+    navtex.py / signal_analysis.py / fax.py / aprs_decoder.py / maildrop_mode.py
     packet_hf.py / packet_vhf.py
   ui/
     main_window.py       MainWindow — QStackedWidget, menus, mode switching
