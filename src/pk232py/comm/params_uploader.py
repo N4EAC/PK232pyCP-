@@ -1,6 +1,6 @@
 # pk232py - Modern multimode terminal for AEA PK-232 / PK-232MBX TNC
-# Copyright (C) 2026  OE3GAS  Ã¢â‚¬â€  GPL v2
-"""TNC Parameter Uploader Ã¢â‚¬â€ sends stored parameters in verbose mode.
+# Copyright (C) 2026  OE3GAS - GPL v2
+"""TNC Parameter Uploader - sends stored parameters in verbose mode.
 
 Reads parameters from AppConfig (which is backed by pk232py.ini) and
 sends them as ASCII verbose-mode commands to the TNC after initialisation.
@@ -9,15 +9,15 @@ All commands are sent as:  COMMAND value\\r\\n
 and followed by a short delay to allow the TNC to process each one.
 
 Parameter groups sent:
-  1. General / identity  Ã¢â‚¬â€ MYCALL, MYPTCALL, MYSELCAL
-  2. HF Packet           Ã¢â‚¬â€ PACLEN, TXDELAY, FRACK, RETRY, MAXFRAME, Ã¢â‚¬Â¦
-  3. PACTOR              Ã¢â‚¬â€ ARQTMO, PTDOWN, PTUP, PT200, Ã¢â‚¬Â¦
-  4. Misc                Ã¢â‚¬â€ CANLINE, SENDPAC, COMMAND char, Ã¢â‚¬Â¦
+  1. General / identity  - MYCALL, MYPTCALL, MYSELCAL
+  2. HF Packet           - PACLEN, TXDELAY, FRACK, RETRY, MAXFRAME, ...
+  3. PACTOR              - ARQTMO, PTDOWN, PTUP, PT200, ...
+  4. Misc                - CANLINE, SENDPAC, COMMAND char, ...
 
 Usage::
 
     uploader = ParamsUploader(serial_manager, config_manager.app)
-    uploader.upload()   # blocking Ã¢â‚¬â€ call from background thread only
+    uploader.upload()   # blocking - call from background thread only
 """
 
 from __future__ import annotations
@@ -43,7 +43,7 @@ class ParamsUploader:
         serial:  SerialManager instance (must be connected, verbose mode).
         config:  AppConfig with all parameter dataclasses.
 
-    Call :meth:`upload` from a background thread Ã¢â‚¬â€ it blocks for
+    Call :meth:`upload` from a background thread - it blocks for
     the duration of the upload (several seconds for a full set).
     """
 
@@ -71,7 +71,13 @@ class ParamsUploader:
         Returns:
             Number of commands sent.
         """
-        commands = self._build_commands()
+        has_pactor = getattr(self._serial, 'has_pactor', True)
+        if not has_pactor:
+            logger.info(
+                "ParamsUploader: TNC has no PACTOR - "
+                "skipping PACTOR-specific commands"
+            )
+        commands = self._build_commands(has_pactor=has_pactor)
         logger.info("ParamsUploader: uploading %d commands", len(commands))
         sent = 0
         for cmd in commands:
@@ -88,7 +94,7 @@ class ParamsUploader:
         logger.info("ParamsUploader: upload complete (%d commands)", sent)
         return sent
 
-    def _build_commands(self) -> list[bytes]:
+    def _build_commands(self, has_pactor: bool = True) -> list[bytes]:
         """Build the full list of verbose-mode parameter commands."""
         cmds: list[bytes] = []
         cmds.append(self._cmd("EXPERT", "ON"))  # enable expert params
@@ -97,14 +103,12 @@ class ParamsUploader:
         hf  = self._config.hf_packet
         pt  = self._config.pactor
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ Identity Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # - Identity -
         if hf.mycall and hf.mycall != "NOCALL":
             cmds.append(self._cmd("MYCALL", hf.mycall.upper()))
+        # MYPTCALL is PACTOR-only - sent inside the has_pactor block below
 
-        if pt.myptcall and pt.myptcall != "NOCALL":
-            cmds.append(self._cmd("MYPTCALL", pt.myptcall.upper()))
-
-        # Ã¢â€â‚¬Ã¢â€â‚¬ HF Packet Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # - HF Packet -
         cmds += [
             self._cmd("PACLEN",   str(hf.paclen)),
             self._cmd("TXDELAY",  str(hf.txdelay)),
@@ -141,15 +145,30 @@ class ParamsUploader:
         if hf.ctext:
             cmds.append(self._cmd("CTEXT",   hf.ctext))
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ PACTOR Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-        cmds += [
-            # PACTOR parameters available in verbose mode
-            self._bool("PTHUFF",  pt.pthuff),   # Huffman compression ON/OFF
-            self._bool("PT200",   pt.pt200),    # auto speed selection ON/OFF
-            self._cmd("PTOVER",  f"${pt.ptover:02X}"),  # changeover char
-        ]
+        # - PACTOR -
+        # PACTOR commands: only send when TNC has the PACTOR option.
+        # On a PK-232MBX without PACTOR, these return ?What? errors.
+        if has_pactor:
+            # PACTOR callsign
+            if pt.myptcall and pt.myptcall != "NOCALL":
+                cmds.append(self._cmd("MYPTCALL", pt.myptcall.upper()))
+            # PACTOR parameters
+            cmds += [
+                self._bool("PTHUFF",  pt.pthuff),
+                self._bool("PT200",   pt.pt200),
+                self._cmd("PTOVER",  f"${pt.ptover:02X}"),
+            ]
+            # AMTOR: ARQTOL only on PACTOR firmware
+            cmds.append(self._cmd("ARQTOL",  str(self._config.amtor.arqtol)))
+            # Baudot/CW: MOPT only on PACTOR firmware
+            cmds.append(self._bool("MOPT", self._config.baudot.mopt))
+        else:
+            logger.debug(
+                "Skipping PACTOR-only commands "
+                "(MYPTCALL, ARQTOL, MOPT) - TNC has no PACTOR option"
+            )
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ AMTOR / NAVTEX / TDM Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # - AMTOR / NAVTEX / TDM -
         am = self._config.amtor
         if am.myselcal:
             cmds.append(self._cmd("MYSELCAL", am.myselcal.upper()))
@@ -159,7 +178,7 @@ class ParamsUploader:
             cmds.append(self._cmd("MYIDENT", am.myident.upper()))
         cmds += [
             self._cmd("ARQTMO",  str(am.arqtmo)),
-            self._cmd("ARQTOL",  str(am.arqtol)),
+            # ARQTOL: PACTOR firmware only - sent in has_pactor block below
             self._cmd("ADELAY",  str(am.adelay)),
             self._cmd("TDBAUD",  str(am.tdbaud)),
             self._cmd("TDCHAN",  str(am.tdchan)),
@@ -169,7 +188,7 @@ class ParamsUploader:
             self._bool("XMITOK",   am.xmitok),
         ]
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ BAUDOT / ASCII / CW Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # - BAUDOT / ASCII / CW -
         ba = self._config.baudot
         cmds += [
             self._cmd("MSPEED",  str(ba.mspeed)),
@@ -177,14 +196,14 @@ class ParamsUploader:
             self._cmd("CODE",    str(ba.code)),
             self._bool("ALFRTTY", ba.alfrtty),
             self._bool("DIDDLE",  ba.diddle),
-            self._bool("MOPT",    ba.mopt),
+            # MOPT (Morse Option): PACTOR firmware only - sent below
             self._bool("RXREV",   ba.rxrev),
             self._bool("TXREV",   ba.txrev),
         ]
         if ba.aab:
             cmds.append(self._cmd("AAB", ba.aab))
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ Misc Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # - Misc -
         mi = self._config.misc
         cmds += [
             self._cmd("CANLINE",  str(mi.canline)),
@@ -193,7 +212,7 @@ class ParamsUploader:
             self._cmd("SENDPAC",  f"${mi.sendpac:02X}"),
         ]
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ MailDrop Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # - MailDrop -
         md = self._config.maildrop
         if md.homebbs:
             cmds.append(self._cmd("HOMEBBS", md.homebbs.upper()))
@@ -210,7 +229,7 @@ class ParamsUploader:
         if md.mtext:
             cmds.append(self._cmd("MTEXT", md.mtext))
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ UTC time Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # - UTC time -
         if tnc.utc_tnc_time:
             from datetime import datetime, timezone
             now = datetime.now(timezone.utc)
@@ -221,7 +240,10 @@ class ParamsUploader:
 
 
         # Restore expert mode to default
-        cmds.append(self._cmd("EXPERT", "OFF"))
+        # EXPERT OFF only for PACTOR-capable firmware
+        # (non-PACTOR variants don't support EXPERT command)
+        if has_pactor:
+            cmds.append(self._cmd("EXPERT", "OFF"))
 
         return cmds
 
