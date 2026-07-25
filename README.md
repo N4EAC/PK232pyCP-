@@ -5,6 +5,9 @@
 [![License: GPL v2](https://img.shields.io/badge/License-GPL_v2-blue.svg)](https://www.gnu.org/licenses/old-licenses/gpl-2.0.en.html)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)](https://github.com/OE3GAS/pk232py)
 
+**This fork "CP" (Cyberpunk Theme) includes untested MFJ-1278 hardware driver**
+<img width="1265" height="817" alt="image" src="https://github.com/user-attachments/assets/e1f58cc9-2566-4e49-a681-021c71f9aec1" />
+
 **PK232PY** is a modern, cross-platform multimode terminal program for the
 **AEA PK-232 / PK-232MBX** Terminal Node Controller (TNC). It brings back the
 functionality of the legacy PCPackRatt software — which no longer runs on 64-bit
