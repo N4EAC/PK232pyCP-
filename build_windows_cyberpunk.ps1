@@ -82,6 +82,49 @@ if (-not (Test-Path ".\build_windows.ps1")) {
     throw "The official build_windows.ps1 file is missing from the project root."
 }
 
+$IconPath = Join-Path $PSScriptRoot "pk232py.ico"
+if (-not (Test-Path $IconPath)) {
+    throw "Application icon is missing: $IconPath"
+}
+
+# Ensure the official Nuitka command actually receives the icon option. The
+# upstream line ends with a PowerShell continuation backtick, which the prior
+# patch did not recognize.
+$OfficialBuild = Join-Path $PSScriptRoot "build_windows.ps1"
+$BuildText = Get-Content $OfficialBuild -Raw
+$IconOption = '    --windows-icon-from-ico="' + $IconPath + '" `'
+
+if ($BuildText -match '(?m)^\s*--windows-icon-from-ico=.*$') {
+    $BuildText = [regex]::Replace(
+        $BuildText,
+        '(?m)^\s*--windows-icon-from-ico=.*$',
+        { param($m) $IconOption },
+        1
+    )
+}
+elseif ($BuildText -match '(?m)^(\s*--windows-console-mode=disable\s+`\s*)$') {
+    $BuildText = [regex]::Replace(
+        $BuildText,
+        '(?m)^(\s*--windows-console-mode=disable\s+`\s*)$',
+        { param($m) $m.Groups[1].Value + "`r`n" + $IconOption },
+        1
+    )
+}
+else {
+    throw "Could not locate the Nuitka Windows console option in build_windows.ps1."
+}
+Set-Content -Path $OfficialBuild -Value $BuildText -Encoding UTF8
+
+# Remove previous build products so Windows cannot continue showing an older
+# executable that was compiled before the icon option was present.
+if (Test-Path ".\dist\pk232py.exe") {
+    Remove-Item ".\dist\pk232py.exe" -Force
+}
+Get-ChildItem -Path $PSScriptRoot -Directory -Filter "*.build" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+Get-ChildItem -Path $PSScriptRoot -Directory -Filter "*.dist" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+Get-ChildItem -Path $PSScriptRoot -Directory -Filter "*.onefile-build" -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
+
+Write-Host "Using application icon: $IconPath" -ForegroundColor Cyan
 & .\build_windows.ps1 -Version $Version
 if ($LASTEXITCODE -ne 0) {
     throw "PK232PY Windows build failed with exit code $LASTEXITCODE."
