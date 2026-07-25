@@ -19,6 +19,7 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=pk232py.ico
 
 [Files]
 Source: "dist\pk232py.exe"; DestDir: "{app}"; Flags: ignoreversion

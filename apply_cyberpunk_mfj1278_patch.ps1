@@ -65,6 +65,39 @@ if (-not $python) { $python = Get-Command py -ErrorAction SilentlyContinue }
 if (-not $python) { throw "Python was not found in PATH." }
 & $python.Source $tmp $root
 if ($LASTEXITCODE -ne 0) { throw "Source patch failed." }
+Copy-Item (Join-Path $PSScriptRoot "pk232py.ico") (Join-Path $root "pk232py.ico") -Force
+Copy-Item (Join-Path $PSScriptRoot "pk232py_icon.png") (Join-Path $root "pk232py_icon.png") -Force
+
+# Add the application icon to the upstream Nuitka build script.
+$buildScript = Join-Path $root "build_windows.ps1"
+if (Test-Path $buildScript) {
+    $buildText = Get-Content $buildScript -Raw
+    if ($buildText -notmatch [regex]::Escape("--windows-icon-from-ico")) {
+        $patterns = @(
+            '(?m)^(\s*["'']--windows-console-mode=disable["''],?\s*)$',
+            '(?m)^(\s*--windows-console-mode=disable\s*)$'
+        )
+        $patched = $false
+        foreach ($pattern in $patterns) {
+            if ($buildText -match $pattern) {
+                $line = $Matches[1]
+                $indent = ([regex]::Match($line, '^\s*')).Value
+                $quote = if ($line -match '"') { '"' } elseif ($line -match "'") { "'" } else { '' }
+                $comma = if ($line.TrimEnd().EndsWith(',')) { ',' } else { '' }
+                $iconLine = if ($quote) { "$indent$quote--windows-icon-from-ico=$root\pk232py.ico$quote$comma" } else { "$indent--windows-icon-from-ico=$root\pk232py.ico" }
+                $buildText = [regex]::Replace($buildText, $pattern, "$line`r`n$iconLine", 1)
+                $patched = $true
+                break
+            }
+        }
+        if (-not $patched) {
+            Write-Warning "Could not automatically insert the Nuitka icon option into build_windows.ps1. The icon files were still copied."
+        } else {
+            Set-Content -Path $buildScript -Value $buildText -Encoding UTF8
+        }
+    }
+}
+
 Copy-Item (Join-Path $PSScriptRoot "build_windows_cyberpunk.ps1") (Join-Path $root "build_windows_cyberpunk.ps1") -Force
 Copy-Item (Join-Path $PSScriptRoot "build.exe.bat") (Join-Path $root "build.exe.bat") -Force
 Copy-Item (Join-Path $PSScriptRoot "PK232PY_Cyberpunk_MFJ1278.iss") (Join-Path $root "PK232PY_Cyberpunk_MFJ1278.iss") -Force
