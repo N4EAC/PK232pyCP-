@@ -1,4 +1,4 @@
-# PK232PY
+# PK232PY "CP"
 
 [![CI](https://github.com/OE3GAS/pk232py/actions/workflows/ci.yml/badge.svg)](https://github.com/OE3GAS/pk232py/actions)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
